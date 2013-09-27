@@ -1,6 +1,8 @@
+{-# LANGUAGE DeriveFunctor #-}
 module Data.List1 where
 
 newtype List1 a = List1 (a, [a])
+	deriving (Eq, Functor)
 
 fromList1 :: List1 a -> [a]
 fromList1 (List1 (x, xs)) = x:xs
