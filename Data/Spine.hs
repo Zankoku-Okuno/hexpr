@@ -37,11 +37,11 @@ import Data.List1
 
 {-
 TODO
-    if a concat map acts on [code], then reduce it
+    make QNest be List1 (Nested (QuasiSpine a)) and Many be List2 (QuasiSpine a)
 
     make QuasiSpine a dependent type, dependent on the level of quotation
 
-    probably even restrict the lists involved to List1 a = Nil1 a | Cons1 a (List1 a)
+    make my own functor instances, so I don't need compiler support
 -}
 
 data Spine a = Leaf a
