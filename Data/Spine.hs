@@ -45,7 +45,7 @@ TODO
 -}
 
 data Spine a = Leaf a
-             | Node (List1 (Spine a))
+             | Node [Spine a]
     deriving Eq
 
 
