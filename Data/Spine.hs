@@ -25,10 +25,10 @@ It would be simple but tedious to lift all of these facts into the type system, 
 {-# LANGUAGE DeriveFunctor #-}
 module Data.Spine (
       Spine (..)
-    , Nested (..)
     , QuasiSpine (..)
-    , DeQuasiSpine (..)
-    , deQuasiSpine
+    , Nested (..)
+    , UnQuasiSpine (..)
+    , unQuasiSpine
     , SimplifySpine (..)
     , simplifySpine
     ) where
@@ -42,39 +42,30 @@ TODO
     probably even restrict the lists involved to List1 a = Nil1 a | Cons1 a (List1 a)
 -}
 
-data QuasiSpine a = QLeaf      a
-                  | QNode      [QuasiSpine a]
-                  | QNest      [Nested (QuasiSpine a)]
-                  | Quasiquote (QuasiSpine a)
-                  | Unquote    (QuasiSpine a)
-    deriving Eq
-
-data NestingSpine a = NLeaf a
-                    | NNode [NestingSpine a]
-                    | NNest [Nested (NestingSpine a)]
-data Nested a = One a | Many [a]
-    deriving (Eq, Functor)
 
 data Spine a = Leaf a
              | Node [Spine a]
     deriving Eq
 
 
-class DeQuasiSpine a where
+data QuasiSpine a = QLeaf      a
+                  | QNode      [QuasiSpine a]
+                  | QNest      [Nested (QuasiSpine a)]
+                  | Quasiquote (QuasiSpine a)
+                  | Unquote    (QuasiSpine a)
+    deriving Eq
+data Nested a = One a | Many [a]
+    deriving (Eq, Functor)
+
+class UnQuasiSpine a where
     quoteForm  :: a
     listForm   :: a
     unnestForm :: a
 
-class (Eq a, DeQuasiSpine a) => SimplifySpine a where
-    isCode   :: a -> Bool
-    toCode   :: Spine a -> a
-    fromCode :: a -> Spine a
-
-
-deQuasiSpine :: DeQuasiSpine a => QuasiSpine a -> Spine a
-deQuasiSpine = trans . impl . normalize
+unQuasiSpine :: UnQuasiSpine a => QuasiSpine a -> Spine a
+unQuasiSpine = trans . impl . normalize
     where
-    impl :: (DeQuasiSpine a) => QuasiSpine a -> QuasiSpine a
+    impl :: (UnQuasiSpine a) => QuasiSpine a -> QuasiSpine a
     impl (Quasiquote (QLeaf x))   = QNode   [QLeaf quoteForm,   QLeaf x]
     impl (Quasiquote (QNode xs))  = QNode . (QLeaf listForm:)   $ map (impl . Quasiquote) xs
     impl (Quasiquote (QNest xss)) = QNode . (QLeaf unnestForm:) $ map (impl . Quasiquote . nest) xss
@@ -86,8 +77,8 @@ deQuasiSpine = trans . impl . normalize
     impl x = x
     trans :: QuasiSpine a -> Spine a
     trans (QLeaf x)   = Leaf x
-    trans (QNode xs)  = Node (map trans xs)
-    trans (QNest xss) = Node (concatMap (\x -> case x of { One x -> [trans x]; Many xs -> map trans xs }) xss)
+    trans (QNode xs)  = Node $ map trans xs
+    trans (QNest xss) = Node $ concatMap (\x -> case x of { One x -> [trans x]; Many xs -> map trans xs }) xss
     normalize :: QuasiSpine a -> QuasiSpine a
     normalize a = case a of
         QLeaf x         -> a
@@ -98,6 +89,12 @@ deQuasiSpine = trans . impl . normalize
         QNest xss       -> QNest $ map (fmap normalize) xss
         Quasiquote x    -> Quasiquote (normalize x)
         Unquote x       -> Unquote (normalize x)
+
+
+class (Eq a, UnQuasiSpine a) => SimplifySpine a where
+    isCode   :: a -> Bool
+    toCode   :: Spine a -> a
+    fromCode :: a -> Spine a
 
 simplifySpine :: SimplifySpine a => Spine a -> Spine a
 simplifySpine x = case x of
