@@ -47,7 +47,8 @@ cabal-version:       >=1.8
 
 library
   -- Modules exported by the library.
-  exposed-modules:     Data.Spine
+  exposed-modules:     Data.Spine,
+                       Data.List1
   
   -- Modules included in this library but not exported.
   -- other-modules:       

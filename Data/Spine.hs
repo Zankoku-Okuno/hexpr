@@ -16,10 +16,9 @@ In order to generate the simplest spines of code objects from quasi-spines, I ha
     Turns a list of quoted values into a code value
 
 What may not be obvious in this implementation (because I can't be bothered to use anything more verbose than the builtin list syntax) is that:
-    a) (Q)Nodes always have at least one element, 
-    b) the lists in Nests each have at least one element
-    c) there are important semantic differences between one-element lists in a Nest with one element, and those with more elements, and
-    d) Unquotes must be nested within a matching Quasiquote.
+    a) the lists in Nests each have at least one element
+    b) there are important semantic differences between one-element lists in a Nest with one element, and those with more elements, and
+    c) Unquotes must be nested within a matching Quasiquote.
 It would be simple but tedious to lift all of these facts into the type system, so for now, I've settled with partial functions.
 -}
 module Data.Spine (
@@ -30,26 +29,26 @@ module Data.Spine (
     , SimplifySpine (..)
     , simplifySpine
     ) where
+import Data.List1
 
 {-
 TODO
-    I should really take void transforms out
-    probably even restrict the lists involved to List1 a = Nil1 a | Cons1 a (List1 a)
-
     the nest should really be Nest = One QuasiSpine | Many [QuasiSpine]
 
     make QuasiSpine a dependent type, dependent on the level of quotation
+
+    nest should probably be List1 (List1 (QuasiSpine a))
 -}
 
 data QuasiSpine a = QLeaf      a
-                  | QNode      [QuasiSpine a]
+                  | QNode      (List1 (QuasiSpine a))
                   | QNest      [[QuasiSpine a]]
                   | Quasiquote (QuasiSpine a)
                   | Unquote    (QuasiSpine a)
     deriving Eq
 
 data Spine a = Leaf a
-             | Node [Spine a]
+             | Node (List1 (Spine a))
     deriving Eq
 
 
@@ -68,38 +67,39 @@ deQuasiSpine :: DeQuasiSpine a => QuasiSpine a -> Spine a
 deQuasiSpine = trans . impl . normalize
     where
     impl :: (DeQuasiSpine a) => QuasiSpine a -> QuasiSpine a
-    impl (Quasiquote (QLeaf x))   = QNode   [QLeaf quoteForm,   QLeaf x]
-    impl (Quasiquote (QNode xs))  = QNode . (QLeaf listForm:)   $ map (impl . Quasiquote) xs
-    impl (Quasiquote (QNest xss)) = QNode . (QLeaf unnestForm:) $ map (impl . Quasiquote . wrap) xss
+    impl (Quasiquote (QLeaf x))   = QNode $ Cons1 (QLeaf quoteForm) (Nil1 $ QLeaf x)
+    impl (Quasiquote (QNode xs))  = QNode . Cons1 (QLeaf listForm)   $ fmap (impl . Quasiquote) xs
+    impl (Quasiquote (QNest xss)) = QNode . Cons1 (QLeaf unnestForm) . toList1 $ map (impl . Quasiquote . wrap) xss
         where
         wrap [x] = x
-        wrap xs = QNode xs
+        wrap xs = QNode . toList1 $ xs
     impl (Quasiquote (Quasiquote x)) = impl . Quasiquote $ impl . Quasiquote $ x
     impl (Quasiquote (Unquote x)) = impl x
     impl x = x
     trans :: QuasiSpine a -> Spine a
     trans (QLeaf x)   = Leaf x
-    trans (QNode xs)  = Node (map trans xs)
-    trans (QNest xss) = Node (concatMap (map trans) xss)
+    trans (QNode xs)  = Node $ fmap trans xs
+    trans (QNest xss) = Node . toList1 $ concatMap (map trans) xss
     normalize :: QuasiSpine a -> QuasiSpine a
     normalize a = case a of
-        QLeaf x      -> a
-        QNode [x]    -> normalize x
-        QNode xs     -> QNode $ map normalize xs
-        QNest [xs]   -> QNode $ map normalize xs
-        QNest xss    -> QNest $ map (map normalize) xss
-        Quasiquote x -> Quasiquote (normalize x)
-        Unquote x    -> Unquote (normalize x)
+        QLeaf x        -> a
+        QNode (Nil1 x) -> normalize x
+        QNode xs       -> QNode $ fmap normalize xs
+        QNest [xs]     -> QNode . toList1 $ map normalize xs
+        QNest xss      -> QNest $ map (map normalize) xss
+        Quasiquote x   -> Quasiquote (normalize x)
+        Unquote x      -> Unquote (normalize x)
 
 simplifySpine :: SimplifySpine a => Spine a -> Spine a
 simplifySpine x = case x of
     Leaf x  -> Leaf x
-    Node [q, x]   | q == Leaf quoteForm -> Leaf . toCode $ simplifySpine x
-    Node (l : xs) | l == Leaf listForm  -> let xs' = map simplifySpine xs
-                                           in if isCode' `all` xs'
-                                             then Leaf . toCode . simplifySpine . Node $ map fromCode' xs'
-                                             else Node (l : xs')
+    Node (Cons1 q (Nil1 x)) | q == Leaf quoteForm -> Leaf . toCode $ simplifySpine x
+    Node (Cons1 l xs)       | l == Leaf listForm  -> 
+        let xs' = fmap simplifySpine xs
+        in if isCode' `all` fromList1 xs'
+          then Leaf . toCode . simplifySpine . Node $ fmap fromCode' xs'
+          else Node (Cons1 l xs')
         where
-        isCode' (Leaf x) = isCode x
+        isCode'   (Leaf x) = isCode x
         fromCode' (Leaf x) = fromCode x
-    Node xs -> Node $ map simplifySpine xs
+    Node xs -> Node $ fmap simplifySpine xs
