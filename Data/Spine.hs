@@ -17,13 +17,15 @@ In order to generate the simplest spines of code objects from quasi-spines, I ha
 
 What may not be obvious in this implementation (because I can't be bothered to use anything more verbose than the builtin list syntax) is that:
     a) (Q)Nodes always have at least one element, 
-    b) the lists in Nests each have at least one element
-    c) there are important semantic differences between one-element lists in a Nest with one element, and those with more elements, and
-    d) Unquotes must be nested within a matching Quasiquote.
+    b) the lists in Nests each have at least one element, and
+    c) Unquotes must be nested within a matching Quasiquote.
 It would be simple but tedious to lift all of these facts into the type system, so for now, I've settled with partial functions.
 -}
+
+{-# LANGUAGE DeriveFunctor #-}
 module Data.Spine (
       Spine (..)
+    , Nested (..)
     , QuasiSpine (..)
     , DeQuasiSpine (..)
     , deQuasiSpine
@@ -33,20 +35,25 @@ module Data.Spine (
 
 {-
 TODO
-    I should really take void transforms out
-    probably even restrict the lists involved to List1 a = Nil1 a | Cons1 a (List1 a)
-
-    the nest should really be Nest = One QuasiSpine | Many [QuasiSpine]
+    make an UnnestSpine class
 
     make QuasiSpine a dependent type, dependent on the level of quotation
+
+    probably even restrict the lists involved to List1 a = Nil1 a | Cons1 a (List1 a)
 -}
 
 data QuasiSpine a = QLeaf      a
                   | QNode      [QuasiSpine a]
-                  | QNest      [[QuasiSpine a]]
+                  | QNest      [Nested (QuasiSpine a)]
                   | Quasiquote (QuasiSpine a)
                   | Unquote    (QuasiSpine a)
     deriving Eq
+
+data NestingSpine a = NLeaf a
+                    | NNode [NestingSpine a]
+                    | NNest [Nested (NestingSpine a)]
+data Nested a = One a | Many [a]
+    deriving (Eq, Functor)
 
 data Spine a = Leaf a
              | Node [Spine a]
@@ -70,26 +77,27 @@ deQuasiSpine = trans . impl . normalize
     impl :: (DeQuasiSpine a) => QuasiSpine a -> QuasiSpine a
     impl (Quasiquote (QLeaf x))   = QNode   [QLeaf quoteForm,   QLeaf x]
     impl (Quasiquote (QNode xs))  = QNode . (QLeaf listForm:)   $ map (impl . Quasiquote) xs
-    impl (Quasiquote (QNest xss)) = QNode . (QLeaf unnestForm:) $ map (impl . Quasiquote . wrap) xss
+    impl (Quasiquote (QNest xss)) = QNode . (QLeaf unnestForm:) $ map (impl . Quasiquote . nest) xss
         where
-        wrap [x] = x
-        wrap xs = QNode xs
+        nest (One x) = x
+        nest (Many xs) = QNode xs
     impl (Quasiquote (Quasiquote x)) = impl . Quasiquote $ impl . Quasiquote $ x
     impl (Quasiquote (Unquote x)) = impl x
     impl x = x
     trans :: QuasiSpine a -> Spine a
     trans (QLeaf x)   = Leaf x
     trans (QNode xs)  = Node (map trans xs)
-    trans (QNest xss) = Node (concatMap (map trans) xss)
+    trans (QNest xss) = Node (concatMap (\x -> case x of { One x -> [trans x]; Many xs -> map trans xs }) xss)
     normalize :: QuasiSpine a -> QuasiSpine a
     normalize a = case a of
-        QLeaf x      -> a
-        QNode [x]    -> normalize x
-        QNode xs     -> QNode $ map normalize xs
-        QNest [xs]   -> QNode $ map normalize xs
-        QNest xss    -> QNest $ map (map normalize) xss
-        Quasiquote x -> Quasiquote (normalize x)
-        Unquote x    -> Unquote (normalize x)
+        QLeaf x         -> a
+        QNode [x]       -> normalize x
+        QNode xs        -> QNode $ map normalize xs
+        QNest [One x]   -> normalize x
+        QNest [Many xs] -> QNode $ map normalize xs
+        QNest xss       -> QNest $ map (fmap normalize) xss
+        Quasiquote x    -> Quasiquote (normalize x)
+        Unquote x       -> Unquote (normalize x)
 
 simplifySpine :: SimplifySpine a => Spine a -> Spine a
 simplifySpine x = case x of
