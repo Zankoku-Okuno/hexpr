@@ -12,12 +12,13 @@ The three special forms in question must
     3) repackage spines analogously to list concatenation, which I call unnesting.
 
 In order to generate the simplest spines of code objects from quasi-spines, I have also developed a simplification algorithm which:
-    Turns a sinqle quoted value into a code value
-    Turns a list of quoted values into a code value
+    Turns [quote form, value] spine into a code value
+    Turns [list form, code values...] into a code value
+    Turns [unnest form, code values...] into a code value
 
 What may not be obvious in this implementation (because I can't be bothered to use anything more verbose than the builtin list syntax) is that:
     a) (Q)Nodes always have at least one element, 
-    b) the lists in Nests each have at least one element, and
+    b) QNests always have at least one element, Many always has at least two elements, and
     c) Unquotes must be nested within a matching Quasiquote.
 It would be simple but tedious to lift all of these facts into the type system, so for now, I've settled with partial functions.
 -}
@@ -104,13 +105,22 @@ class (Eq a, UnQuasiSpine a) => SimplifySpine a where
 
 simplifySpine :: SimplifySpine a => Spine a -> Spine a
 simplifySpine x = case x of
-    Leaf x  -> Leaf x
-    Node [q, x]   | q == Leaf quoteForm -> Leaf . toCode $ simplifySpine x
-    Node (l : xs) | l == Leaf listForm  -> let xs' = map simplifySpine xs
-                                           in if isCode' `all` xs'
-                                             then Leaf . toCode . simplifySpine . Node $ map fromCode' xs'
-                                             else Node (l : xs')
-        where
-        isCode' (Leaf x) = isCode x
-        fromCode' (Leaf x) = fromCode x
-    Node xs -> Node $ map simplifySpine xs
+        Leaf x  -> Leaf x
+        Node [q, x]   | q == Leaf quoteForm  -> toCode' $ simplifySpine x
+        Node (l : xs) | l == Leaf listForm  ->
+            let xs' = map simplifySpine xs
+            in if isCode' `all` xs'
+              then toCode' . simplifySpine . Node $ map fromCode' xs'
+              else Node (l : xs')
+        Node (c : xs) | c == Leaf unnestForm ->
+            let xs' = map simplifySpine xs
+            in if isCode' `all` xs'
+              then toCode' . Node $ concatMap (unnest . fromCode') xs'
+              else Node (c : xs')
+        Node xs -> Node $ map simplifySpine xs
+    where
+    isCode' (Leaf x) = isCode x
+    toCode' = Leaf . toCode
+    fromCode' (Leaf x) = fromCode x
+    unnest (Leaf x) = [Leaf x]
+    unnest (Node xs) = xs
