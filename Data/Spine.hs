@@ -35,7 +35,7 @@ module Data.Spine (
 
 {-
 TODO
-    make an UnnestSpine class
+    if a concat map acts on [code], then reduce it
 
     make QuasiSpine a dependent type, dependent on the level of quotation
 
@@ -46,6 +46,12 @@ TODO
 data Spine a = Leaf a
              | Node [Spine a]
     deriving Eq
+
+
+unNestSpine :: ([Nested (QuasiSpine a)] -> [Spine a]) -> QuasiSpine a -> Spine a
+unNestSpine f (QLeaf x) = Leaf x
+unNestSpine f (QNode xs) = Node $ map (unNestSpine f) xs
+unNestSpine f (QNest xss) = Node $ f xss
 
 
 data QuasiSpine a = QLeaf      a
@@ -76,9 +82,9 @@ unQuasiSpine = trans . impl . normalize
     impl (Quasiquote (Unquote x)) = impl x
     impl x = x
     trans :: QuasiSpine a -> Spine a
-    trans (QLeaf x)   = Leaf x
-    trans (QNode xs)  = Node $ map trans xs
-    trans (QNest xss) = Node $ concatMap (\x -> case x of { One x -> [trans x]; Many xs -> map trans xs }) xss
+    trans = unNestSpine . concatMap $ \xs -> case xs of
+            One x -> [trans x]
+            Many xs -> map trans xs
     normalize :: QuasiSpine a -> QuasiSpine a
     normalize a = case a of
         QLeaf x         -> a
