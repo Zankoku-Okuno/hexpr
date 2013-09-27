@@ -16,11 +16,8 @@ In order to generate the simplest spines of code objects from quasi-spines, I ha
     Turns [list form, code values...] into a code value
     Turns [unnest form, code values...] into a code value
 
-What may not be obvious in this implementation (because I can't be bothered to use anything more verbose than the builtin list syntax) is that:
-    a) (Q)Nodes always have at least one element, 
-    b) QNests always have at least one element, Many always has at least two elements, and
-    c) Unquotes must be nested within a matching Quasiquote.
-It would be simple but tedious to lift all of these facts into the type system, so for now, I've settled with partial functions.
+What may not be obvious in this implementation is that Unquotes must be nested within a matching Quasiquote.
+It would be simple but tedious to lift this fact into the type system, so for now, I've settled with partial functions.
 -}
 
 {-# LANGUAGE DeriveFunctor #-}
@@ -47,9 +44,9 @@ data Spine a = Leaf a
 
 
 unNestSpine :: (List1 (Nested (QuasiSpine a)) -> List1 (Spine a)) -> QuasiSpine a -> Spine a
-unNestSpine f (QLeaf x) = Leaf x
+unNestSpine f (QLeaf x)       = Leaf x
 unNestSpine f (QNode (x, xs)) = Node (unNestSpine f x, map (unNestSpine f) xs)
-unNestSpine f (QNest xss) = Node $ f xss
+unNestSpine f (QNest xss)     = Node $ f xss
 
 
 data QuasiSpine a = QLeaf      a
@@ -70,19 +67,19 @@ unQuasiSpine :: UnQuasiSpine a => QuasiSpine a -> Spine a
 unQuasiSpine = trans . impl . normalize
     where
     impl :: (UnQuasiSpine a) => QuasiSpine a -> QuasiSpine a
-    impl (Quasiquote (QLeaf x))   = QNode (QLeaf quoteForm, [QLeaf x])
-    impl (Quasiquote (QNode (x,xs)))  = QNode (QLeaf listForm, map (impl . Quasiquote) (x:xs))
-    impl (Quasiquote (QNest (xs, xss))) = QNode (QLeaf unnestForm, map (impl . Quasiquote . nest) (xs:xss))
+    impl (Quasiquote (QLeaf x))         = QNode (QLeaf quoteForm  , [QLeaf x])
+    impl (Quasiquote (QNode (x,xs)))    = QNode (QLeaf listForm   , map (impl . Quasiquote) (x:xs))
+    impl (Quasiquote (QNest (xs, xss))) = QNode (QLeaf unnestForm , map (impl . Quasiquote . nest) (xs:xss))
         where
         nest (One x) = x
         nest (Many (x1, x2, xs)) = QNode (x1, x2:xs)
     impl (Quasiquote (Quasiquote x)) = impl . Quasiquote $ impl . Quasiquote $ x
-    impl (Quasiquote (Unquote x)) = impl x
+    impl (Quasiquote (Unquote x))    = impl x
     impl x = x
     trans :: QuasiSpine a -> Spine a
-    trans = unNestSpine $ \(xs, xss) -> (unsafeToNode . concat) (unnest xs : map unnest xss)
+    trans = unNestSpine $ \(xs, xss) -> (unsafeToList1 . concat) (unnest xs : map unnest xss)
         where
-        unnest (One x) = [trans x]
+        unnest (One x)             = [trans x]
         unnest (Many (x1, x2, xs)) = trans x1 : trans x2 : map trans xs
     normalize :: QuasiSpine a -> QuasiSpine a
     normalize a = case a of
@@ -103,28 +100,29 @@ class (Eq a, UnQuasiSpine a) => SimplifySpine a where
 
 simplifySpine :: SimplifySpine a => Spine a -> Spine a
 simplifySpine x = case x of
-        Leaf x  -> Leaf x
-        Node (x, []) -> simplifySpine x
+        Leaf x        -> Leaf x
+        Node (x, [])  -> simplifySpine x
         Node (q, [x]) | q == Leaf quoteForm  -> toCode' $ simplifySpine x
         Node (l, xs)  | l == Leaf listForm  ->
-            let xs' = map simplifySpine xs
-            in if isCode' `all` xs'
-              then toCode' . simplifySpine . Node . unsafeToNode $ map fromCode' xs'
-              else Node (l, xs')
-        Node (c, xs) | c == Leaf unnestForm ->
-            let xs' = map simplifySpine xs
-            in if isCode' `all` xs'
-              then toCode' . Node . unsafeToNode $ concatMap (unnest . fromCode') xs'
-              else Node (c, xs')
-        Node (x, xs) -> Node (simplifySpine x, map simplifySpine xs)
+                        let xs' = map simplifySpine xs
+                        in if isCode' `all` xs'
+                          then toCode' . simplifySpine . unsafeToNode $ map fromCode' xs'
+                          else Node (l, xs')
+        Node (c, xs)  | c == Leaf unnestForm ->
+                        let xs' = map simplifySpine xs
+                        in if isCode' `all` xs'
+                          then toCode' . unsafeToNode $ concatMap (unnest . fromCode') xs'
+                          else Node (c, xs')
+        Node (x, xs)   -> Node (simplifySpine x, map simplifySpine xs)
     where
     isCode' (Leaf x) = isCode x
     toCode' = Leaf . toCode
     fromCode' (Leaf x) = fromCode x
     unnest (Leaf x) = [Leaf x]
     unnest (Node (x, xs)) = x:xs
+    unsafeToNode = Node . unsafeToList1
 
 
 type List1 a = (a, [a])
 type List2 a = (a, a, [a])
-unsafeToNode xs = (head xs, tail xs)
+unsafeToList1 xs = (head xs, tail xs)
