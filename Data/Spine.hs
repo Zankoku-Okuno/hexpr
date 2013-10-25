@@ -20,16 +20,15 @@ What may not be obvious in this implementation is that Unquotes must be nested w
 It would be simple but tedious to lift this fact into the type system, so for now, I've settled with partial functions.
 -}
 
-{-# LANGUAGE DeriveFunctor #-}
 module Data.Spine (
       Spine (..)
     , QuasiSpine (..)
-    , Nested (..)
     , UnQuasiSpine (..)
     , unQuasiSpine
     , SimplifySpine (..)
     , simplifySpine
     ) where
+import Data.List
 
 {-
 TODO
@@ -39,24 +38,15 @@ TODO
 -}
 
 data Spine a = Leaf a
-             | Node (List1 (Spine a))
+             | Node [Spine a]
     deriving Eq
-
-
-unNestSpine :: (List1 (Nested (QuasiSpine a)) -> List1 (Spine a)) -> QuasiSpine a -> Spine a
-unNestSpine f (QLeaf x)       = Leaf x
-unNestSpine f (QNode (x, xs)) = Node (unNestSpine f x, map (unNestSpine f) xs)
-unNestSpine f (QNest xss)     = Node $ f xss
-
 
 data QuasiSpine a = QLeaf      a
-                  | QNode      (List1 (QuasiSpine a))
-                  | QNest      (List1 (Nested (QuasiSpine a)))
+                  | QNode      [QuasiSpine a]
                   | Quasiquote (QuasiSpine a)
                   | Unquote    (QuasiSpine a)
+                  | Splice     (QuasiSpine a)
     deriving Eq
-data Nested a = One a | Many (List2 a)
-    deriving (Eq, Functor)
 
 class UnQuasiSpine a where
     quoteForm  :: a
@@ -67,31 +57,38 @@ unQuasiSpine :: UnQuasiSpine a => QuasiSpine a -> Spine a
 unQuasiSpine = trans . impl . normalize
     where
     impl :: (UnQuasiSpine a) => QuasiSpine a -> QuasiSpine a
-    impl (Quasiquote (QLeaf x))         = QNode (QLeaf quoteForm  , [QLeaf x])
-    impl (Quasiquote (QNode (x,xs)))    = QNode (QLeaf listForm   , map (impl . Quasiquote) (x:xs))
-    impl (Quasiquote (QNest (xs, xss))) = QNode (QLeaf unnestForm , map (impl . Quasiquote . nest) (xs:xss))
-        where
-        nest (One x) = x
-        nest (Many (x1, x2, xs)) = QNode (x1, x2:xs)
-    impl (Quasiquote (Quasiquote x)) = impl . Quasiquote $ impl . Quasiquote $ x
+    impl (Quasiquote (QLeaf x))      = QNode [QLeaf quoteForm, QLeaf x]
+    impl (Quasiquote (QNode xs))     = unquasiquoteNode xs
+    impl (Quasiquote (Quasiquote x)) = pushQuote . pushQuote $ x
     impl (Quasiquote (Unquote x))    = impl x
+    impl (Quasiquote (Splice x))     = impl x
     impl x = x
     trans :: QuasiSpine a -> Spine a
-    trans = unNestSpine $ \(xs, xss) -> (unsafeToList1 . concat) (unnest xs : map unnest xss)
-        where
-        unnest (One x)             = [trans x]
-        unnest (Many (x1, x2, xs)) = trans x1 : trans x2 : map trans xs
+    trans (QLeaf x)  = Leaf x
+    trans (QNode xs) = Node (map trans xs)
     normalize :: QuasiSpine a -> QuasiSpine a
     normalize a = case a of
-        QLeaf x                       -> a
-        QNode (x, [])                 -> normalize x
-        QNode (x, xs)                 -> QNode (normalize x, map normalize xs)
-        QNest (One x, [])             -> normalize x
-        QNest (Many (x1, x2, xs), []) -> QNode (normalize x1, map normalize (x2:xs))
-        QNest (xs, xss)               -> QNest (fmap normalize xs, map (fmap normalize) xss)
-        Quasiquote x                  -> Quasiquote (normalize x)
-        Unquote x                     -> Unquote (normalize x)
-
+        QLeaf x       -> a
+        QNode [x]     -> normalize x
+        QNode xs      -> QNode (map normalize xs)
+        Quasiquote x  -> Quasiquote (normalize x)
+        Unquote x     -> Unquote (normalize x)
+        Splice x      -> Splice (normalize x)
+    unquasiquoteNode xs = case groupBy splitSplices xs of
+            [xs] | isSplice xs -> error "unquote splicing really unimplemented"
+                 | otherwise   -> QNode (QLeaf listForm : map pushQuote xs)
+            xss -> QNode (QLeaf unnestForm : map createSpliceList xss)
+        where
+            splitSplices x y = case (x, y) of 
+                (Splice _, _) -> False
+                (_, Splice _) -> False
+                _ -> True
+            createSpliceList xs = if isSplice xs
+                then (let [x] = xs in pushQuote x)
+                else QNode (QLeaf listForm : map pushQuote xs)
+            isSplice xs = case xs of { [Splice _] -> True; _ -> False }
+    pushQuote :: (UnQuasiSpine a) => QuasiSpine a -> QuasiSpine a
+    pushQuote = impl . Quasiquote
 
 class (Eq a, UnQuasiSpine a) => SimplifySpine a where
     isCode   :: a -> Bool
@@ -100,29 +97,25 @@ class (Eq a, UnQuasiSpine a) => SimplifySpine a where
 
 simplifySpine :: SimplifySpine a => Spine a -> Spine a
 simplifySpine x = case x of
-        Leaf x        -> Leaf x
-        Node (x, [])  -> simplifySpine x
-        Node (q, [x]) | q == Leaf quoteForm  -> toCode' $ simplifySpine x
-        Node (l, xs)  | l == Leaf listForm  ->
+        Leaf x       -> Leaf x
+        Node (x:[])  -> simplifySpine x
+        Node (q:[x]) | q == Leaf quoteForm -> toCode' $ simplifySpine x
+        Node (l:xs)  | l == Leaf listForm  ->
                         let xs' = map simplifySpine xs
                         in if isCode' `all` xs'
-                          then toCode' . simplifySpine . unsafeToNode $ map fromCode' xs'
-                          else Node (l, xs')
-        Node (c, xs)  | c == Leaf unnestForm ->
+                          then toCode' . simplifySpine . Node $ map fromCode' xs'
+                          else Node (l:xs')
+        Node (c:xs)  | c == Leaf unnestForm ->
                         let xs' = map simplifySpine xs
                         in if isCode' `all` xs'
-                          then toCode' . unsafeToNode $ concatMap (unnest . fromCode') xs'
-                          else Node (c, xs')
-        Node (x, xs)   -> Node (simplifySpine x, map simplifySpine xs)
+                          then toCode' . Node $ concatMap (unnest . fromCode') xs'
+                          else Node (c:xs')
+        Node xs   -> Node (map simplifySpine xs)
     where
     isCode' (Leaf x) = isCode x
+    isCode' _ = False
     toCode' = Leaf . toCode
     fromCode' (Leaf x) = fromCode x
     unnest (Leaf x) = [Leaf x]
-    unnest (Node (x, xs)) = x:xs
-    unsafeToNode = Node . unsafeToList1
+    unnest (Node xs) = xs
 
-
-type List1 a = (a, [a])
-type List2 a = (a, a, [a])
-unsafeToList1 xs = (head xs, tail xs)
