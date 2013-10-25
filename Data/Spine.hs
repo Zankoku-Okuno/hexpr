@@ -1,9 +1,9 @@
-{- Spines are a data structure for representing and storing first-class code objects in a strong-, statically-typed language.
+{- Spines are a data structure for representing and storing first-class code objects in a strongly-, statically-typed language.
 
 In an untyped language, first-class code may be represented by simple lists, which may then hold both atomic values as well as other lists.
 As code objects will need to be manipulated regularly, untyped lists are insuficient in a statically typed language.
 
-Because languages with first-class code benefit greatly from quasiquotation, I also introduce the quasi-spine along with bundled algortihms for transforming quasi-spines into spines.
+Because languages with first-class code benefit greatly from quasiquotation, I also introduce the quasi-spine along with algortihms for transforming quasi-spines into spines.
 This transformation requires at least certain special forms to be indicated by some marker in the first position of a spine node.
 This convention was chosen because of this tradition in Lisp and ought not to be too limiting for language implementors.
 The three special forms in question must

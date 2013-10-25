@@ -47,11 +47,13 @@ cabal-version:       >=1.8
 
 library
   -- Modules exported by the library.
-  exposed-modules:     Data.Spine
+  exposed-modules:     Data.Spine,
+                       Data.Spine.Parser
   
   -- Modules included in this library but not exported.
   -- other-modules:       
   
   -- Other library packages from which modules are imported.
-  build-depends:       base ==4.6.*
+  build-depends:       base ==4.6.*,
+                       parsec >=3.0
   
