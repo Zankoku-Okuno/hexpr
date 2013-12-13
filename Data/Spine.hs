@@ -57,6 +57,7 @@ unQuasiSpine :: UnQuasiSpine a => QuasiSpine a -> Spine a
 unQuasiSpine = trans . impl . normalize
     where
     impl :: (UnQuasiSpine a) => QuasiSpine a -> QuasiSpine a
+    impl (QNode xs)                  = QNode (map impl xs)
     impl (Quasiquote (QLeaf x))      = QNode [QLeaf quoteForm, QLeaf x]
     impl (Quasiquote (QNode xs))     = unquasiquoteNode xs
     impl (Quasiquote (Quasiquote x)) = pushQuote . pushQuote $ x
@@ -66,6 +67,7 @@ unQuasiSpine = trans . impl . normalize
     trans :: QuasiSpine a -> Spine a
     trans (QLeaf x)  = Leaf x
     trans (QNode xs) = Node (map trans xs)
+    trans (Quasiquote _) = error "tried to translate quasiquote"
     normalize :: QuasiSpine a -> QuasiSpine a
     normalize a = case a of
         QLeaf x       -> a
