@@ -1,23 +1,58 @@
+{- |
+
+Framework for parsing spines using a variant on s-expressions (see below).
+The user provides an instance of `QuasiSpineParser a`, and is then able to use this module to parse `Spine a`.
+To this end, three node/leaf parsers and two token combinators are provided. Sticking to these high-level functions should allow a fair amount of grammatical space while keeping the grammar simple.
+
+The grammar for normal s-expressions is `start ::= atom | '(' start+ ')'`. 
+To this, we have added quotation (including quasiquotation, unquote, and splicing), but we omit it from the grammar here for clarity.
+The real extension of concrete syntax is that we add the pattern `'('? indent start+ dedent`. Further, each line at the same level of indent is wrapped into a node as well.
+
+Substituting parenthesis for indentation appropriately greatly reduces the need for parenthesis bookeeping and improves readability, without sacrificing the advantages of s-expressions.
+Readers may wonder at the optional paren that may preceed an indent: when two consecutive nodes need to be introduced, a paren may be placed on its own line.
+
+The tokenizers also handle line continuations (backslash-newline), as well as line comments (introduced with `#`) and nested block comments (surounded by `#{` and `}#`).
+A comment or line continuation cound as one space for the purposes of separating tokens.
+
+There are three entry points, which parse a quasispine and perform some amount of tidying up: convertion to a plain spline and simplify.
+
+At the moment, comments are delimited with # and #{ ... }#.
+I'd advise against allowing these patterns in atoms.
+On the other hand, I may decide to parameterize these, at which point, you can mix and match to taste.
+Parenthesis should probably always be kept out of user parsers.
+
+-}
+
 module Data.Spine.Parser (
       QuasiSpineParser (..)
     , Parser
-    , runQSParser
-    , startState
-    , parseSpine
-    , parseNode
-    , token
-    ) where
+    
+    , runSpineParser
+    , runQuasiSpineParser
+    , runComplexSpineParser
 
-import Data.Spine
+    , parseFile
+    , parseNode
+    , parseSpine
+    , token
+    , gap
+    ) where
 
 import Control.Monad
 import Text.Parsec hiding (space, spaces, newline, token)
 import Text.Parsec.Char hiding (space, spaces, newline)
 
+import Data.Spine
+
 
 ------ Types ------
-class UnQuasiSpine a => QuasiSpineParser a where
+class QuasiSpineParser a where
     parseAtom :: Parser (QuasiSpine a)
+    parseQuote :: Parser (QuasiSpine a)
+    parseQuasiquote :: Parser (QuasiSpine a)
+    parseUnquote :: Parser (QuasiSpine a)
+    parseSplice :: Parser (QuasiSpine a)
+
 
 type Parser = Parsec String QuasiSpineState
 
@@ -29,24 +64,23 @@ startState = ([0], Right 0)
 
 
 ------ Entry Points ------
-runQSParser :: QuasiSpineParser a => SourceName -> String -> Either ParseError [Spine a]
-runQSParser path input = do
-    case runP parseQuasiSpine startState path input of
-        Left err  -> Left err
-        Right val -> Right . map unQuasiSpine $ val
+runSpineParser :: (QuasiSpineParser a, UnQuasiSpine a, SimplifySpine a) => SourceName -> String -> Either ParseError [Spine a]
+runSpineParser path input = fmap (map $ simplifySpine . unQuasiSpine) (runQuasiSpineParser path input)
 
-parseQuasiSpine :: QuasiSpineParser a => Parser [QuasiSpine a]
-parseQuasiSpine = do
-    many (try blankLine)
-    xs <- parseNode `sepEndBy` nextline
-    many (try blankLine) >> token eof
-    return xs
+runQuasiSpineParser :: (QuasiSpineParser a) => SourceName -> String -> Either ParseError [QuasiSpine a]
+runQuasiSpineParser = runParser parseFile startState
+
+runComplexSpineParser :: (QuasiSpineParser a, UnQuasiSpine a) => SourceName -> String -> Either ParseError [Spine a]
+runComplexSpineParser path input =  fmap (map unQuasiSpine) (runQuasiSpineParser path input)
 
 
------- Node Parsing ------
+------ Main Parsing ------
+parseFile :: QuasiSpineParser a => Parser [QuasiSpine a]
+parseFile = between skipLines (skipLines >> eof) (parseNode `sepEndBy` nextline)
+
 parseSpine :: QuasiSpineParser a => Parser (QuasiSpine a)
 parseSpine = choice [ parseAtom
-                    , parseQuasiQuote, parseUnquote, parseSplice, parseQuote
+                    , _parseQuasiquote, _parseUnquote, _parseSplice, _parseQuote
                     , indentNode, parenNode
                     ]
     where
@@ -60,23 +94,21 @@ parseSpine = choice [ parseAtom
         end = token $ char ')'
 
 parseNode :: QuasiSpineParser a => Parser (QuasiSpine a)
-parseNode = liftM QNode (parseSpine `sepEndBy1` spaces1)
+parseNode = liftM QNode (parseSpine `sepEndBy1` spaces)
 
 
------- Quote Parsing ------
-parseQuasiQuote :: QuasiSpineParser a => Parser (QuasiSpine a)
-parseQuasiQuote = pushQuoteLevel >> char '`' >> liftM Quasiquote parseSpine
+------ Quote Parser Wrappers ------
+_parseQuote :: QuasiSpineParser a => Parser (QuasiSpine a)
+_parseQuote = liftM Quasiquote $ between disableQuasiquote enableQuasiquote parseQuote
 
-parseUnquote :: QuasiSpineParser a => Parser (QuasiSpine a)
-parseUnquote = popQuoteLevel >> char ',' >> liftM Unquote parseSpine
+_parseQuasiquote :: QuasiSpineParser a => Parser (QuasiSpine a)
+_parseQuasiquote = liftM Quasiquote (pushQuoteLevel >> parseQuasiquote)
 
-parseSplice :: QuasiSpineParser a => Parser (QuasiSpine a)
-parseSplice = popQuoteLevel >> char '~' >> liftM Splice parseSpine
+_parseUnquote :: QuasiSpineParser a => Parser (QuasiSpine a)
+_parseUnquote = liftM Unquote (popQuoteLevel >> parseUnquote)
 
-parseQuote :: QuasiSpineParser a => Parser (QuasiSpine a)
-parseQuote = char '\'' >> liftM Quasiquote (inQuote parseSpine)
-    where
-    inQuote = between disableQuasiquote enableQuasiquote
+_parseSplice :: QuasiSpineParser a => Parser (QuasiSpine a)
+_parseSplice = liftM Splice (popQuoteLevel >> parseSplice)
 
 
 ------ Indentation Parsing ------
@@ -102,7 +134,7 @@ dedent = try $ do
         then return ()
         else fail "expected dedent"
 lineAndLeading :: Parser IndentDepth
-lineAndLeading = token $ do
+lineAndLeading = do
     newline
     depth <- liftM length (many $ char ' ')
     return depth
@@ -131,15 +163,16 @@ pushQuoteLevel = do
     (indentLevel, oldLevel) <- getState
     case oldLevel of
         Right x -> putState (indentLevel, Right (x+1))
-        Left _ -> fail "unexpected quasiquote inside quote"
+        Left _ -> fail "quasiquotation operator inside quote"
 popQuoteLevel :: Parser ()
 popQuoteLevel = do
     (indentLevel, oldLevel) <- getState
     case oldLevel of
         Right x -> do
-            when (x <= 0) $ fail "unexpected unquote outside of quasiquote"
+            when (x <= 0) $ failure
             putState (indentLevel, Right (x-1))
-        Left _ -> fail "unexpected unquote in quote"
+        Left _ -> failure
+    where failure = fail "unquotation operator outside of quasiquote"
 disableQuasiquote :: Parser ()
 disableQuasiquote = do
     (indentLevel, Right quoteLevel) <- getState
@@ -153,10 +186,12 @@ enableQuasiquote = do
 ------ Basic Whitespace ------
 token :: Parser a -> Parser a
 token = (spaces >>)
+gap :: String -> Parser ()
+gap = void . lookAhead . oneOf . (" \t\n\\#()" ++) --TODO ensure I have all the leading chars of space included
+
+
 spaces :: Parser ()
 spaces = skipMany space
-spaces1 :: Parser ()
-spaces1 = lookAhead (oneOf " \t\n\\#") >> spaces --TODO this is a hack, but it may just work: ensure that all valid start chars are included
 space :: Parser ()
 space = choice [ void (oneOf " \t")
                , void (char '\\' >> newline)
@@ -175,16 +210,14 @@ space = choice [ void (oneOf " \t")
 
 hardNewline :: Parser ()
 hardNewline = void (char '\n')
-blankLine :: Parser ()
-blankLine = spaces >> hardNewline
+skipLines :: Parser ()
+skipLines = optional (try newline) --TODO not sure I need this try
 newline :: Parser ()
 newline = oneNewline >> skipNewlines
     where
     oneNewline = token (hardNewline <|> eof)
-    isBlankLine =  (lookAhead (try blankLine) >> return True)
-               <|> (eof >> return False)
+    isBlankLine =  (lookAhead (try $ token hardNewline) >> return True)
+               <|> (eof >> return False) -- prevents infinite loop from next clause
                <|> (lookAhead (try $ spaces >> eof) >> return True)
                <|> return False
     skipNewlines = isBlankLine >>= \blank -> if blank then newline else return ()
-
-a << b = do { x <- a; b; return x }
