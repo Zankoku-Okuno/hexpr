@@ -99,40 +99,41 @@ parseNode = liftM QNode (parseSpine `sepEndBy1` spaces)
 
 ------ Quote Parser Wrappers ------
 _parseQuote :: QuasiSpineParser a => Parser (QuasiSpine a)
-_parseQuote = liftM Quasiquote $ between disableQuasiquote enableQuasiquote parseQuote
+_parseQuote = liftM Quasiquote $ between disableQuasiquote enableQuasiquote (parseQuote <?> "quotation operator")
 
 _parseQuasiquote :: QuasiSpineParser a => Parser (QuasiSpine a)
-_parseQuasiquote = liftM Quasiquote (pushQuoteLevel >> parseQuasiquote)
+_parseQuasiquote = liftM Quasiquote (pushQuoteLevel >> parseQuasiquote <?> "quotation operator")
 
 _parseUnquote :: QuasiSpineParser a => Parser (QuasiSpine a)
-_parseUnquote = liftM Unquote (popQuoteLevel >> parseUnquote)
+_parseUnquote = liftM Unquote (popQuoteLevel >> parseUnquote <?> "quotation operator")
 
 _parseSplice :: QuasiSpineParser a => Parser (QuasiSpine a)
-_parseSplice = liftM Splice (popQuoteLevel >> parseSplice)
+_parseSplice = liftM Splice (popQuoteLevel >> parseSplice <?> "quotation operator")
 
 
 ------ Indentation Parsing ------
 nextline :: Parser ()
-nextline = try $ do
+nextline = (<?> "new line") . try $ do
     expectedSpaces <- peekIndentLevel
     leadingSpaces <- lineAndLeading
     if leadingSpaces == expectedSpaces
         then return ()
         else fail "expecting same indentation level"
 indent :: Parser ()
-indent = try $ do
+indent = (<?> "indent") . try $ do
     expectedSpaces <- peekIndentLevel
     leadingSpaces <- lineAndLeading
     if leadingSpaces > expectedSpaces
         then pushIndentLevel leadingSpaces
         else fail "expecting indent"
 dedent :: Parser ()
-dedent = try $ do
+dedent = (<?> "dedent") . try $ do
     expectedSpaces <- popIndentLevel
     leadingSpaces <- lookAhead $ try lineAndLeading
     if leadingSpaces < expectedSpaces
         then return ()
         else fail "expected dedent"
+
 lineAndLeading :: Parser IndentDepth
 lineAndLeading = do
     newline
@@ -187,7 +188,7 @@ enableQuasiquote = do
 token :: Parser a -> Parser a
 token = (spaces >>)
 gap :: String -> Parser ()
-gap = void . lookAhead . oneOf . (" \t\n\\#()" ++) --TODO ensure I have all the leading chars of space included
+gap = (<?> "space before next token") . void . lookAhead . oneOf . (" \t\n\\#()" ++) --TODO ensure I have all the leading chars of space included
 
 
 spaces :: Parser ()
@@ -197,7 +198,7 @@ space = choice [ void (oneOf " \t")
                , void (char '\\' >> newline)
                , void blockComment
                , void lineComment -- must come after block comment
-               ]
+               ] <?> "space"
     where
     lineComment = char '#' >> many (noneOf "\n")
     blockComment = void $ between (try $ string "#{") (string "}#") (many blockSegment)
