@@ -188,8 +188,9 @@ enableQuasiquote = do
 token :: Parser a -> Parser a
 token = (spaces >>)
 gap :: String -> Parser ()
-gap = (<?> "space before next token") . void . lookAhead . oneOf . (" \t\n\\#()" ++) --TODO ensure I have all the leading chars of space included
-
+gap extraChars = nextCharIsSpace <|> eof <?> "space before next token"
+    where
+    nextCharIsSpace = void . lookAhead . oneOf $ (" \t\n\\#()" ++ extraChars) --TODO ensure I have all the leading chars of space included
 
 spaces :: Parser ()
 spaces = skipMany space
