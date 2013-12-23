@@ -11,10 +11,10 @@
     you're willing to mangle into shape.
 
     A distributed affix consists of a number of alternating 'keywords' and 'slots'. While keywords
-    should be a leaf node, slots may be either leaves or contain further branches. If we denote
-    slots by underscores and keywords by some reasonable programming language identifier
-    (w/o underscores), then some representative distfix examples might be `_+_`, `_?_:_`, `_!`
-    `if_then_else_`, and `while_do_end`.
+    should match exactly one leaf node, slots can consume multple nodes (leaves or brances) during
+    a detection. If we denote slots by underscores and keywords by some reasonable programming
+    language identifier (w/o underscores), then some representative distfix examples might be
+    `_+_`, `_?_:_`, `_!` `if_then_else_`, and `while_do_end`.
 
     Using the algorithm requires categorizing the input distfixes in several dimentions: topology,
     associativity, priority, and precedence. Only precedence need by specified by the user (it is
@@ -30,10 +30,17 @@
     <when we unwrap, we assume the wrapping was parens, so that's all done first>
 
     <rewriting merely adds parenthesis, never removes, and the only motion is removing the keywords and replacing them with a single leaf at the stqart of the rewritten node>
+
+    <separate structure and detect classes mean we don't need FlexibleInstances extension>
+
+    <not sure how prioroty/detection will work if the same keyword appears twice in the same distfix, prolly best to avoid for now>
+    <precedence table stored in ascending order>
 -}
 
 module Data.Distfix (
       Distfix(..)
+    , Topology(..)
+    , DistfixStructure(..)
     , DistfixDetect(..)
     , DistfixTable
     , runDistfix
@@ -48,10 +55,12 @@ import Control.Monad
 
 
 ------ Types ------
-class DistfixDetect a where
-    match :: a -> a -> Bool
+class DistfixStructure a where
+    nodeMatch :: a -> a -> Bool
     unwrap :: a -> Maybe [a]
     rewrap :: [a] -> a
+class DistfixDetect a where
+    match :: a -> a -> Bool
 
 
 data Distfix a = Distfix a Topology [a]
@@ -67,8 +76,15 @@ data DistfixError a = AmbiguousErr [Match a]
 type DistfixResult a = Either (DistfixError a) a
 
 
+------ Instances ------
+instance Show a => Show (DistfixError a) where
+    show (AmbiguousErr matches) = headText ++ concatMap (const "\n\thi") matches --map (("\n\t"++) . show . rewrite id) matches
+        where headText = "Ambiguous distfix parse. Could have been one of:"
+    show (LeftoverErr [k]) = "Leftover keyword: " ++ show k
+    show (LeftoverErr ks) = "Leftover keywords:" ++ concatMap ((' ':) . show) ks
+
 ------ Main Algorithm ------
-runDistfix :: DistfixDetect a => DistfixTable a -> a -> DistfixResult a
+runDistfix :: DistfixStructure a => DistfixTable a -> a -> DistfixResult a
 runDistfix table x = case unwrap x of
     Nothing -> return x
     Just xs -> mapM (runDistfix table) xs >>= impl table
@@ -78,9 +94,20 @@ runDistfix table x = case unwrap x of
         NoMatch -> impl rows xs
         OneMatch op -> rewrite (impl table') op
         Ambiguous ops -> Left $ AmbiguousErr ops
-    allKeywords = nubBy match . (concatMap . concatMap) (\(Distfix _ _ ks) -> ks) $ table
+    allKeywords = nubBy nodeMatch . (concatMap . concatMap) (\(Distfix _ _ ks) -> ks) $ table
 
-rewrite :: DistfixDetect a => ([a] -> DistfixResult a) -> Match a -> DistfixResult a
+rewrite :: DistfixStructure a => ([a] -> DistfixResult a) -> Match a -> DistfixResult a
+rewrite recurse (Distfix distfix _ _, [], inside, []) = do
+    inside' <- mapM recurse inside
+    return . rewrap $ distfix : inside'
+rewrite recurse (Distfix distfix _ _, [], inside, after) = do
+    inside' <- mapM recurse inside
+    after'  <- recurse after
+    return . rewrap $ distfix : inside' ++ [after']
+rewrite recurse (Distfix distfix _ _, before, inside, []) = do
+    before' <- recurse before
+    inside' <- mapM recurse inside
+    return . rewrap $ distfix : before' : inside'
 rewrite recurse (Distfix distfix _ _, before, inside, after) = do
     before' <- recurse before
     inside' <- mapM recurse inside
@@ -90,7 +117,7 @@ rewrite recurse (Distfix distfix _ _, before, inside, after) = do
 
 ------ Selection ------
 -- | Given a bunch of distfixes (at the same precedence level), try to find an unambiguous distfix parse within a list
-resolve :: DistfixDetect a => [Distfix a] -> [a] -> MatchResult a
+resolve :: DistfixStructure a => [Distfix a] -> [a] -> MatchResult a
 resolve ops xs = resolve detectAll []
     where
     detectAll = catMaybes $ map (detect xs) ops
@@ -134,9 +161,9 @@ decidePriority a@(Distfix _ topA ksA, bA, iA, aA) b@(Distfix _ topB ksB, bB, iB,
     (_,             Closed)        -> Lower
     _                              -> None
     where
-    decideLeft = leftmost `joinPriority` mostKeywords
+    decideRight = leftmost `joinPriority` mostKeywords
         where leftmost = fromOrd . negOrd $ comparing leftmostKeyword a b
-    decideRight = rightmost `joinPriority` mostKeywords
+    decideLeft = rightmost `joinPriority` mostKeywords
         where rightmost = fromOrd $ comparing rightmostKeyword a b
     decideClosed = leftmostNoOverlap `joinPriority` outermost `joinPriority` (if exactOverlap then mostKeywords else None)
         where
@@ -157,50 +184,52 @@ decidePriority a@(Distfix _ topA ksA, bA, iA, aA) b@(Distfix _ topB ksB, bB, iB,
     mostKeywords = fromOrd $ comparing impl a b
         where impl (Distfix _ _ ks, _, _, _) = length ks
     -- index of leftmost keyword in the original node
-    leftmostKeyword (Distfix _ OpenLeft _, _, inside, _) = length (head inside)
-    leftmostKeyword (Distfix _ HalfOpenLeft _, before, _, _) = length before
+    leftmostKeyword (Distfix _ OpenRight _, _, inside, _) = length (head inside)
+    leftmostKeyword (Distfix _ HalfOpenRight _, before, _, _) = length before
     leftmostKeyword (Distfix _ Closed _, before, _, _) = length before
     -- index of rightmost keyword in the original node
-    rightmostKeyword (Distfix _ OpenRight _, _, inside, _) = sum (map length $ init inside) + (length (init inside) - 1)
-    rightmostKeyword (Distfix _ HalfOpenRight _, _, inside, _) = sum (map length inside) + (length inside - 1)
+    rightmostKeyword (Distfix _ OpenLeft _, _, inside, _) = sum (map length $ init inside) + (length (init inside) - 1)
+    rightmostKeyword (Distfix _ HalfOpenLeft _, _, inside, _) = sum (map length inside) + (length inside - 1)
     rightmostKeyword (Distfix _ Closed _, before, inside, _) = length before + sum (map length inside) + length inside
 
 
 ------ Detection ------
-findLeftovers :: DistfixDetect a => [a] -> [a] -> DistfixResult a
-findLeftovers ks xs = case filter (\x -> any (match x) ks) xs of
+findLeftovers :: DistfixStructure a => [a] -> [a] -> DistfixResult a
+findLeftovers ks xs = case filter (\x -> any (nodeMatch x) ks) xs of
     [] -> return . rewrap $ xs
     errs -> Left $ LeftoverErr errs
 
-detect :: DistfixDetect a => [a] -> Distfix a -> Maybe (Match a)
+detect :: DistfixStructure a => [a] -> Distfix a -> Maybe (Match a)
 detect xs fix@(Distfix _ topology ks) = do
     when (length ks == 0) $ error "distfixes must have at least one keyword"
     (before, inside, after) <- case topology of
         Closed -> do
-            when (length ks < 2) $ error "closed distfixes must have al least two keywords"
+            when (length ks < 2) $ error "closed distfixes must have at least two keywords"
             (as, ds) <- findKey    (head ks)          xs
-            (bs, cs) <- revFindKey (last ks)          ds
-            res      <- detectBody (init . tail $ ks) bs
+            (cs, bs) <- revFindKey (last ks)          ds
+            res      <- detectBody (init . tail $ ks) cs
             return (as, res, bs)
-        HalfOpenLeft -> error "unimplemented" --STUB
         HalfOpenRight -> error "unimplemented" --STUB
-        OpenLeft -> do
+        HalfOpenLeft -> error "unimplemented" --STUB
+        OpenRight -> do
             (as, bs) <- findKey (head ks) xs
             res <- detectBody (tail ks) bs
             return ([], as:res, [])
-        OpenRight -> do
+        OpenLeft -> do
             (as, bs) <- revFindKey (last ks) xs
             res <- revDetectBody (init ks) as
             return ([], res++[bs], [])
         OpenNon -> error "unimplemented" --STUB
-    return (fix, before, inside, after)
+    if any null inside
+        then Nothing
+        else return (fix, before, inside, after)
 
-detectBody :: DistfixDetect a => [a] -> [a] -> Maybe [[a]]
+detectBody :: DistfixStructure a => [a] -> [a] -> Maybe [[a]]
 detectBody [] xs = Just [xs]
 detectBody (k:ks) xs = do
     (as, bs) <- findKey k xs
     liftM (as:) (detectBody ks bs)
-revDetectBody :: DistfixDetect a => [a] -> [a] -> Maybe [[a]]
+revDetectBody :: DistfixStructure a => [a] -> [a] -> Maybe [[a]]
 revDetectBody ks xs = liftM (map reverse) $ impl (reverse ks) (reverse xs)
     where
     impl [] xs = Just [xs]
@@ -209,11 +238,11 @@ revDetectBody ks xs = liftM (map reverse) $ impl (reverse ks) (reverse xs)
         liftM (as:) (revDetectBody ks bs)
 
 
-findKey :: DistfixDetect a => a -> [a] -> Maybe ([a], [a])
-findKey k xs = case break (match k) xs of
+findKey :: DistfixStructure a => a -> [a] -> Maybe ([a], [a])
+findKey k xs = case break (nodeMatch k) xs of
     res@(_, []) -> Nothing
     (before, (_:after)) -> Just (before, after)
-revFindKey :: DistfixDetect a => a -> [a] -> Maybe ([a], [a])
+revFindKey :: DistfixStructure a => a -> [a] -> Maybe ([a], [a])
 revFindKey k xs = do
     (b,a) <- findKey k (reverse xs)
     return (reverse a, reverse b)
