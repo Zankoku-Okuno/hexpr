@@ -77,11 +77,15 @@ type DistfixResult a = Either (DistfixError a) a
 
 
 ------ Instances ------
-instance Show a => Show (DistfixError a) where
-    show (AmbiguousErr matches) = headText ++ concatMap (const "\n\thi") matches --map (("\n\t"++) . show . rewrite id) matches
-        where headText = "Ambiguous distfix parse. Could have been one of:"
+instance (Show a, DistfixStructure a) => Show (DistfixError a) where
+    show (AmbiguousErr matches) = headText ++ concatMap makeLine matches
+        where
+        headText = "Ambiguous distfix parse. Could have been one of:"
+        makeLine = ("\n\t"++) . show . right . rewrite (Right . rewrap)
+        right (Right x) = x
     show (LeftoverErr [k]) = "Leftover keyword: " ++ show k
     show (LeftoverErr ks) = "Leftover keywords:" ++ concatMap ((' ':) . show) ks
+
 
 ------ Main Algorithm ------
 runDistfix :: DistfixStructure a => DistfixTable a -> a -> DistfixResult a
@@ -130,8 +134,7 @@ resolve ops xs = resolve detectAll []
                            else                   resolve xs (x:eqSet)
         where is = (`elem` map (decidePriority x) eqSet)
 
-{-| Given two matches `a` and `b`, determine when `a` should be matched in relation to `b`.
-    If `a` should be handled first, then evaluate to has `Higher`. If later, `Lower`, and if there's no precedence rule, then `None`.
+{-| Given two matches `a` and `b`, determine whether `a` has higher priority than `b`, or no realation.
     
     The rules are these:
         If both distfixes have the same associativity,
@@ -146,7 +149,6 @@ resolve ops xs = resolve detectAll []
         Other pairs of matches have no priority relation
 -}
 decidePriority :: Match a -> Match a -> Priority
---TODO TESTME I'm sure I mucked up the logic somewhere in here
 decidePriority a@(Distfix _ topA ksA, bA, iA, aA) b@(Distfix _ topB ksB, bB, iB, aB) = case (topA, topB) of
     (OpenLeft,      OpenLeft)      -> decideLeft
     (OpenLeft,      HalfOpenLeft)  -> decideLeft
@@ -209,8 +211,14 @@ detect xs fix@(Distfix _ topology ks) = do
             (cs, bs) <- revFindKey (last ks)          ds
             res      <- detectBody (init . tail $ ks) cs
             return (as, res, bs)
-        HalfOpenRight -> error "unimplemented" --STUB
-        HalfOpenLeft -> error "unimplemented" --STUB
+        HalfOpenRight -> do
+            (as, bs) <- findKey (head ks) xs
+            res <- detectBody (tail ks) bs
+            return (as, res, [])
+        HalfOpenLeft -> do
+            (as, bs) <- revFindKey (last ks) xs
+            res <- revDetectBody (init ks) as
+            return ([], res, bs)
         OpenRight -> do
             (as, bs) <- findKey (head ks) xs
             res <- detectBody (tail ks) bs
@@ -219,8 +227,13 @@ detect xs fix@(Distfix _ topology ks) = do
             (as, bs) <- revFindKey (last ks) xs
             res <- revDetectBody (init ks) as
             return ([], res++[bs], [])
-        OpenNon -> error "unimplemented" --STUB
-    if any null inside
+        OpenNon -> do
+            (as, bs) <- findKey (head ks) xs
+            res <- detectBody (tail ks) bs
+            if isJust $ detect (last res) fix
+                then Nothing
+                else return ([], as:res, [])
+    if null `any` inside
         then Nothing
         else return (fix, before, inside, after)
 
@@ -249,7 +262,6 @@ revFindKey k xs = do
 
 
 ------ Helpers ------
-
 joinPriority :: Priority -> Priority -> Priority
 joinPriority None y = y
 joinPriority x _ = x
