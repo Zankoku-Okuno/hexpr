@@ -1,6 +1,6 @@
 {-| We present an algorithm for de-sugaring distributed affixes (distfixes) in a rose-like data
-    structure. Distfixes are also known as "mixfixes", but I chose "dist-" because the part of the
-    affix are distributed in-order through the root, rather than mixed in (possibly out-of-order)
+    structure. Distfixes are also known as "mixfixes", but I chose "dist-" because the parts of the
+    affix are distributed in-order through the root, rather than mixed in (out-of-order connotation)
     with the root. Now then, let's actually describe a distfix in detail:
     
     By rose-like data structure, we mean any type `a` such that if an element of `a` can be
@@ -16,25 +16,74 @@
     language identifier (w/o underscores), then some representative distfix examples might be
     `_+_`, `_?_:_`, `_!` `if_then_else_`, and `while_do_end`.
 
+    When given a list of expressions (a node) and a distfix, the distfix may be detected within the
+    list. When multiple distfixes in a scheme could match, which distfixes bind more or less
+    tightly is determined by precedence and priority (see below).
+
+    Given that a particular distfix is detected, we rewrite the list of terms into a rose-like
+    structure by "extracting" the distfix keywords before its slots (in the process translating the
+    disparate parts into a single item given in the definition of the distfix). Each slot is
+    wrapped in its own node, but the order is not perturbed.
+
+    Detections are made recursivly. That is, this algorithm is applied at every node in the
+    structure (as made available by `unwrap`). Each node is assumed to have been wrapped in
+    parenthesis during parsing, and therefore resets the precedence level. Note that rewriting only
+    adds nodes to the structure, never removes them, and so we can see distfixes as adding implicit
+    parenthesis, which can be quite valuble for increasing the signal-to-noise ratio in a
+    programming language.
+
+
     Using the algorithm requires categorizing the input distfixes in several dimentions: topology,
     associativity, priority, and precedence. Only precedence need by specified by the user (it is
     extrinsic to any distfix), the rest are either specified in or calculated from the
     construction of the distfix at hand. We discuss these properties below:
 
-    TODO documentation
+    Slots in a distfix are always separated by keywords, but they may also be preceeded or
+    followed by a keyword. The precence or absence of certain keywords is the topology of a
+    distfix, and this affects the possibilities of its associativity. There are four options:
+        Closed: preceded and followed by keywords (e.g. `begin_end`)
+        Half-open Left: only followed by a keyword (e.g. `_!`)
+        Half-open Right: only preceded by a keyword (e.g. `if_then_else_`)
+        Open: neither preceded nor followed by a kwyword (e.g. `_+_`)
 
-    <topology closed, open, half-open>
-    <associativity>
-    <priority>
-    <precedence>
-    <when we unwrap, we assume the wrapping was parens, so that's all done first>
+    As usual, there are three associativities: left-, right-, and non-associative. Open distfixes
+    can take any of these three. Closed distfixes have no associtivity. Half-open left distfixes
+    are always left associative, and half-open right are always right associative.
 
-    <rewriting merely adds parenthesis, never removes, and the only motion is removing the keywords and replacing them with a single leaf at the stqart of the rewritten node>
+    Operators are divided into precedence levels as normal, but there are no limits on the number
+    of precedence levels available for use. In the distfix table, groups of distfixes of the same
+    precedence are sorted in ascending order.
 
-    <separate structure and detect classes mean we don't need FlexibleInstances extension>
+    When multiple distfixes in a single precedence level are found, an attempt is made to
+    disambiguate using a "priority scheme" calculated from the properties of the distfixes in
+    question. Provided that one distfix has a higher priority than all the other identified
+    distfixes, the highest priority distfix binds most tightly. When no such highest priority
+    distfix exists, this is an error.
 
-    <not sure how prioroty/detection will work if the same keyword appears twice in the same distfix, prolly best to avoid for now>
-    <precedence table stored in ascending order>
+    The rules for calculating priority are these:
+        * If both distfixes have the same associativity (left- or right-, but not non-associative),
+            * The one with the "most significant" keyword "earliest" has priority:
+                * Left-associative: most significant = first, earliest = leftmost
+                * Right-associative: most significant = last, earliest = rightmost
+            * If its a still a tie, then the one with the most keywords has priority
+        * If both distfixes are closed, then they must be non-overlapping, or one must contain the other
+            * It doesn't really matter which has higher priority if they don't overlap (we've chosen leftmost for now)
+            * If one nests within the other, the outer has priority
+            * If they overlap exactly, then the one with the most keywords has priority
+        * Other pairs of matches have no priority relation
+
+
+    Now, some more techincal notes:
+
+    I'm not sure how detection and prioroty will work if the same keyword appears twice in the same
+    distfix, so it's probably best to avoid that for now. Or work it out and tell me, whatever.
+    Either someone will need this at some point, at we'll deal with it, or maybe I'll get bored, or
+    maybe I just won't care enough relative to other problems.
+
+    The two-typeclass system might seem a bit strange, but this is so I can avoid making the user
+    involve ghc's FlexibleInstances extension. So, give an instance for `DistfixDetect SomeType`
+    and `DistfixDetect a => DistfixStructure (Spine a)`, with `nodeMatch` simply unwrapping `Leaf`
+    and delegating to `match`.
 -}
 
 module Data.Distfix (
@@ -101,22 +150,11 @@ runDistfix table x = case unwrap x of
     allKeywords = nubBy nodeMatch . (concatMap . concatMap) (\(Distfix _ _ ks) -> ks) $ table
 
 rewrite :: DistfixStructure a => ([a] -> DistfixResult a) -> Match a -> DistfixResult a
-rewrite recurse (Distfix distfix _ _, [], inside, []) = do
-    inside' <- mapM recurse inside
-    return . rewrap $ distfix : inside'
-rewrite recurse (Distfix distfix _ _, [], inside, after) = do
-    inside' <- mapM recurse inside
-    after'  <- recurse after
-    return . rewrap $ distfix : inside' ++ [after']
-rewrite recurse (Distfix distfix _ _, before, inside, []) = do
-    before' <- recurse before
-    inside' <- mapM recurse inside
-    return . rewrap $ distfix : before' : inside'
 rewrite recurse (Distfix distfix _ _, before, inside, after) = do
-    before' <- recurse before
+    before' <- if null before then return [] else liftM (:[]) (recurse before)
     inside' <- mapM recurse inside
-    after'  <- recurse after
-    return . rewrap $ distfix : before' : inside' ++ [after']
+    after'  <- if null after then return [] else liftM (:[]) (recurse after)
+    return . rewrap $ distfix : before' ++ inside' ++ after'
 
 
 ------ Selection ------
@@ -134,20 +172,6 @@ resolve ops xs = resolve detectAll []
                            else                   resolve xs (x:eqSet)
         where is = (`elem` map (decidePriority x) eqSet)
 
-{-| Given two matches `a` and `b`, determine whether `a` has higher priority than `b`, or no realation.
-    
-    The rules are these:
-        If both distfixes have the same associativity,
-            The one with the "most significant" keyword "earliest" has priority:
-                Left-associative: most significant = first, earliest = leftmost
-                Right-associative: most significant = last, earliest = rightmost
-            If its a still a tie, then the one with the most keywords has priority
-        If both distfixes are closed, then they must be non-overlapping, or one must contain the other
-            It doesn't really matter which we do first if they don't overlap, we've chosen leftmost for now
-            If one nests within the other, the outer has priority
-            If they overlap exactly, then the one with the most keywords has priority
-        Other pairs of matches have no priority relation
--}
 decidePriority :: Match a -> Match a -> Priority
 decidePriority a@(Distfix _ topA ksA, bA, iA, aA) b@(Distfix _ topB ksB, bB, iB, aB) = case (topA, topB) of
     (OpenLeft,      OpenLeft)      -> decideLeft
@@ -249,7 +273,6 @@ revDetectBody ks xs = liftM (map reverse) $ impl (reverse ks) (reverse xs)
     impl (k:ks) xs = do
         (bs, as) <- revFindKey k xs
         liftM (as:) (revDetectBody ks bs)
-
 
 findKey :: DistfixStructure a => a -> [a] -> Maybe ([a], [a])
 findKey k xs = case break (nodeMatch k) xs of
