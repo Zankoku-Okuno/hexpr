@@ -151,10 +151,8 @@ runDistfix table x = case unwrap x of
 
 rewrite :: DistfixStructure a => ([a] -> DistfixResult a) -> Match a -> DistfixResult a
 rewrite recurse (Distfix distfix _ _, before, inside, after) = do
-    before' <- if null before then return [] else liftM (:[]) (recurse before)
-    inside' <- mapM recurse inside
-    after'  <- if null after then return [] else liftM (:[]) (recurse after)
-    return . rewrap $ distfix : before' ++ inside' ++ after'
+    inside' <- liftM (rewrap . (distfix:)) (mapM recurse inside)
+    recurse $ before ++ [inside'] ++ after
 
 
 ------ Selection ------
