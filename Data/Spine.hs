@@ -22,9 +22,13 @@ It would be simple but tedious to lift this fact into the type system, so for no
 
 module Data.Spine (
       Spine (..)
-    , QuasiSpine (..)
-    , UnQuasiSpine (..)
-    , unQuasiSpine
+    , Quasispine (..)
+    
+    , wrapSpine
+    , wrapQuasispine
+
+    , UnQuasispine (..)
+    , unQuasispine
     , SimplifySpine (..)
     , simplifySpine
     ) where
@@ -32,31 +36,45 @@ import Data.List
 
 {-
 TODO
-    make QuasiSpine a dependent type, dependent on the level of quotation
+    make Quasispine a dependent type, dependent on the level of quotation
 
     make my own functor instances, so I don't need compiler support
 -}
 
+------ Types ------
 data Spine a = Leaf a
              | Node [Spine a]
     deriving Eq
 
-data QuasiSpine a = QLeaf      a
-                  | QNode      [QuasiSpine a]
-                  | Quasiquote (QuasiSpine a)
-                  | Unquote    (QuasiSpine a)
-                  | Splice     (QuasiSpine a)
+data Quasispine a = QLeaf      a
+                  | QNode      [Quasispine a]
+                  | Quasiquote (Quasispine a)
+                  | Unquote    (Quasispine a)
+                  | Splice     (Quasispine a)
     deriving Eq
 
-class UnQuasiSpine a where
+
+wrapSpine :: [Spine a] -> Spine a
+wrapSpine [] = error "spine nodes must have at least one element"
+wrapSpine [x] = x
+wrapSpine xs = Node xs
+
+wrapQuasispine :: [Quasispine a] -> Quasispine a
+wrapQuasispine [] = error "quasispine nodes must have at least one element"
+wrapQuasispine [x] = x
+wrapQuasispine xs = QNode xs
+
+
+------ Spine Transforms ------
+class UnQuasispine a where
     quoteForm  :: a
     listForm   :: a
     unnestForm :: a
 
-unQuasiSpine :: UnQuasiSpine a => QuasiSpine a -> Spine a
-unQuasiSpine = trans . impl . normalize
+unQuasispine :: UnQuasispine a => Quasispine a -> Spine a
+unQuasispine = trans . impl . normalize
     where
-    impl :: (UnQuasiSpine a) => QuasiSpine a -> QuasiSpine a
+    impl :: (UnQuasispine a) => Quasispine a -> Quasispine a
     impl (QNode xs)                  = QNode (map impl xs)
     impl (Quasiquote (QLeaf x))      = QNode [QLeaf quoteForm, QLeaf x]
     impl (Quasiquote (QNode xs))     = unquasiquoteNode xs
@@ -64,11 +82,11 @@ unQuasiSpine = trans . impl . normalize
     impl (Quasiquote (Unquote x))    = impl x
     impl (Quasiquote (Splice x))     = impl x
     impl x = x
-    trans :: QuasiSpine a -> Spine a
+    trans :: Quasispine a -> Spine a
     trans (QLeaf x)  = Leaf x
     trans (QNode xs) = Node (map trans xs)
     trans (Quasiquote _) = error "tried to translate quasiquote"
-    normalize :: QuasiSpine a -> QuasiSpine a
+    normalize :: Quasispine a -> Quasispine a
     normalize a = case a of
         QLeaf x       -> a
         QNode [x]     -> normalize x
@@ -89,10 +107,10 @@ unQuasiSpine = trans . impl . normalize
                 then (let [x] = xs in pushQuote x)
                 else QNode (QLeaf listForm : map pushQuote xs)
             isSplice xs = case xs of { [Splice _] -> True; _ -> False }
-    pushQuote :: (UnQuasiSpine a) => QuasiSpine a -> QuasiSpine a
+    pushQuote :: (UnQuasispine a) => Quasispine a -> Quasispine a
     pushQuote = impl . Quasiquote
 
-class (Eq a, UnQuasiSpine a) => SimplifySpine a where
+class (Eq a, UnQuasispine a) => SimplifySpine a where
     isCode   :: a -> Bool
     toCode   :: Spine a -> a
     fromCode :: a -> Spine a
@@ -121,3 +139,15 @@ simplifySpine x = case x of
     unnest (Leaf x) = [Leaf x]
     unnest (Node xs) = xs
 
+
+------ Instances ------
+instance Functor Spine where
+    fmap f (Leaf x) = Leaf (f x)
+    fmap f (Node xs) = Node $ (map . fmap) f xs
+
+instance Functor Quasispine where
+    fmap f (QLeaf x) = QLeaf (f x)
+    fmap f (QNode xs) = QNode $ (map . fmap) f xs
+    fmap f (Quasiquote x) = Quasiquote (fmap f x)
+    fmap f (Unquote x) = Unquote (fmap f x)
+    fmap f (Splice x) = Splice (fmap f x)

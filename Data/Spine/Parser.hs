@@ -1,7 +1,7 @@
 {- |
 
 Framework for parsing spines using a variant on s-expressions (see below).
-The user provides an instance of `QuasiSpineParser a`, and is then able to use this module to parse `Spine a`.
+The user provides an instance of `QuasispineParser a`, and is then able to use this module to parse `Spine a`.
 To this end, three node/leaf parsers and two token combinators are provided. Sticking to these high-level functions should allow a fair amount of grammatical space while keeping the grammar simple.
 
 The grammar for normal s-expressions is `start ::= atom | '(' start+ ')'`. 
@@ -24,11 +24,11 @@ Parenthesis should probably always be kept out of user parsers.
 -}
 
 module Data.Spine.Parser (
-      QuasiSpineParser (..)
+      QuasispineParser (..)
     , Parser
     
     , runSpineParser
-    , runQuasiSpineParser
+    , runQuasispineParser
     , runComplexSpineParser
 
     , parseFile
@@ -46,39 +46,39 @@ import Data.Spine
 
 
 ------ Types ------
-class QuasiSpineParser a where
-    parseAtom :: Parser (QuasiSpine a)
-    parseQuote :: Parser (QuasiSpine a)
-    parseQuasiquote :: Parser (QuasiSpine a)
-    parseUnquote :: Parser (QuasiSpine a)
-    parseSplice :: Parser (QuasiSpine a)
+class QuasispineParser a where
+    parseAtom :: Parser (Quasispine a)
+    parseQuote :: Parser (Quasispine a)
+    parseQuasiquote :: Parser (Quasispine a)
+    parseUnquote :: Parser (Quasispine a)
+    parseSplice :: Parser (Quasispine a)
 
 
-type Parser = Parsec String QuasiSpineState
+type Parser = Parsec String QuasispineState
 
 type IndentDepth = Int
 type QuasiQuoteDepth = Int
-type QuasiSpineState = ([IndentDepth], Either QuasiQuoteDepth QuasiQuoteDepth)
-startState :: QuasiSpineState
+type QuasispineState = ([IndentDepth], Either QuasiQuoteDepth QuasiQuoteDepth)
+startState :: QuasispineState
 startState = ([0], Right 0)
 
 
 ------ Entry Points ------
-runSpineParser :: (QuasiSpineParser a, UnQuasiSpine a, SimplifySpine a) => SourceName -> String -> Either ParseError [Spine a]
-runSpineParser path input = fmap (map $ simplifySpine . unQuasiSpine) (runQuasiSpineParser path input)
+runSpineParser :: (QuasispineParser a, UnQuasispine a, SimplifySpine a) => SourceName -> String -> Either ParseError [Spine a]
+runSpineParser path input = fmap (map $ simplifySpine . unQuasispine) (runQuasispineParser path input)
 
-runQuasiSpineParser :: (QuasiSpineParser a) => SourceName -> String -> Either ParseError [QuasiSpine a]
-runQuasiSpineParser = runParser parseFile startState
+runQuasispineParser :: (QuasispineParser a) => SourceName -> String -> Either ParseError [Quasispine a]
+runQuasispineParser = runParser parseFile startState
 
-runComplexSpineParser :: (QuasiSpineParser a, UnQuasiSpine a) => SourceName -> String -> Either ParseError [Spine a]
-runComplexSpineParser path input =  fmap (map unQuasiSpine) (runQuasiSpineParser path input)
+runComplexSpineParser :: (QuasispineParser a, UnQuasispine a) => SourceName -> String -> Either ParseError [Spine a]
+runComplexSpineParser path input = fmap (map unQuasispine) (runQuasispineParser path input)
 
 
 ------ Main Parsing ------
-parseFile :: QuasiSpineParser a => Parser [QuasiSpine a]
+parseFile :: QuasispineParser a => Parser [Quasispine a]
 parseFile = between skipLines (skipLines >> eof) (parseNode `sepEndBy` nextline)
 
-parseSpine :: QuasiSpineParser a => Parser (QuasiSpine a)
+parseSpine :: QuasispineParser a => Parser (Quasispine a)
 parseSpine = choice [ parseAtom
                     , _parseQuasiquote, _parseUnquote, _parseSplice, _parseQuote
                     , indentNode, parenNode
@@ -93,21 +93,21 @@ parseSpine = choice [ parseAtom
         start = char '('
         end = token $ char ')'
 
-parseNode :: QuasiSpineParser a => Parser (QuasiSpine a)
+parseNode :: QuasispineParser a => Parser (Quasispine a)
 parseNode = liftM QNode (parseSpine `sepEndBy1` spaces)
 
 
 ------ Quote Parser Wrappers ------
-_parseQuote :: QuasiSpineParser a => Parser (QuasiSpine a)
+_parseQuote :: QuasispineParser a => Parser (Quasispine a)
 _parseQuote = liftM Quasiquote $ between disableQuasiquote enableQuasiquote (parseQuote <?> "quotation operator")
 
-_parseQuasiquote :: QuasiSpineParser a => Parser (QuasiSpine a)
+_parseQuasiquote :: QuasispineParser a => Parser (Quasispine a)
 _parseQuasiquote = liftM Quasiquote (pushQuoteLevel >> parseQuasiquote <?> "quotation operator")
 
-_parseUnquote :: QuasiSpineParser a => Parser (QuasiSpine a)
+_parseUnquote :: QuasispineParser a => Parser (Quasispine a)
 _parseUnquote = liftM Unquote (popQuoteLevel >> parseUnquote <?> "quotation operator")
 
-_parseSplice :: QuasiSpineParser a => Parser (QuasiSpine a)
+_parseSplice :: QuasispineParser a => Parser (Quasispine a)
 _parseSplice = liftM Splice (popQuoteLevel >> parseSplice <?> "quotation operator")
 
 
