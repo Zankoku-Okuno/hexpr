@@ -54,6 +54,7 @@ class QuasispineParser a where
     parseSplice :: Parser (Quasispine a)
 
 
+{-| Type synonym for parsing quasispines. -}
 type Parser = Parsec String QuasispineState
 
 type IndentDepth = Int
@@ -75,9 +76,13 @@ runComplexSpineParser path input = fmap (map unQuasispine) (runQuasispineParser 
 
 
 ------ Main Parsing ------
+{-| Parse a string only of quasispines separated by nextlines.
+    Leading and trailing whitesapce is discarded.
+-}
 parseFile :: QuasispineParser a => Parser [Quasispine a]
 parseFile = between skipLines (skipLines >> eof) (parseNode `sepEndBy` nextline)
 
+{-| Parse a single atom, parethesized/indented node or a (quasi)quoted/unquoted/spliced node. -}
 parseSpine :: QuasispineParser a => Parser (Quasispine a)
 parseSpine = choice [ parseAtom
                     , _parseQuasiquote, _parseUnquote, _parseSplice, _parseQuote
@@ -93,6 +98,7 @@ parseSpine = choice [ parseAtom
         start = char '('
         end = token $ char ')'
 
+{-| Parse a number of space-separated spines. -}
 parseNode :: QuasispineParser a => Parser (Quasispine a)
 parseNode = liftM QNode (parseSpine `sepEndBy1` spaces)
 
@@ -185,8 +191,13 @@ enableQuasiquote = do
 
 
 ------ Basic Whitespace ------
+{-| Wrap a token parser in this to consumes whitespace to find the next token. -}
 token :: Parser a -> Parser a
 token = (spaces >>)
+{-| Inspects the next character to determine if it is a clear token-separator.
+    Such separators are whitespace, parens, hash (#), and whatever extra characters (passed to the
+    combinator) are appropriate for the language at hand.
+-}
 gap :: String -> Parser ()
 gap extraChars = nextCharIsSpace <|> eof <?> "space before next token"
     where

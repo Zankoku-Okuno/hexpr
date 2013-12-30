@@ -85,7 +85,6 @@
     and `DistfixDetect a => DistfixStructure (Spine a)`, with `nodeMatch` simply unwrapping `Leaf`
     and delegating to `match`.
 -}
-
 module Data.Distfix (
       Distfix(..)
     , Topology(..)
