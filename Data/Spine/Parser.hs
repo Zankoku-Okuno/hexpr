@@ -25,6 +25,7 @@ Parenthesis should probably always be kept out of user parsers.
 
 module Data.Spine.Parser (
       QuasispineParser (..)
+    , QuasispineState
     , Parser
     
     , runSpineParser
@@ -35,6 +36,7 @@ module Data.Spine.Parser (
     , parseNode
     , parseSpine
     , token
+    , noLayout
     , gap
     ) where
 
@@ -59,9 +61,9 @@ type Parser = Parsec String QuasispineState
 
 type IndentDepth = Int
 type QuasiQuoteDepth = Int
-type QuasispineState = ([IndentDepth], Either QuasiQuoteDepth QuasiQuoteDepth)
+newtype QuasispineState = S { unState :: ([IndentDepth], Either QuasiQuoteDepth QuasiQuoteDepth) }
 startState :: QuasispineState
-startState = ([0], Right 0)
+startState = S ([0], Right 0)
 
 
 ------ Entry Points ------
@@ -150,50 +152,53 @@ lineAndLeading = do
 
 ------ Query/update indent and quote depths ------
 peekIndentLevel :: Parser IndentDepth
-peekIndentLevel = liftM (head . fst) getState
+peekIndentLevel = liftM (head . fst . unState) getState
 pushIndentLevel :: IndentDepth -> Parser ()
 pushIndentLevel n = do
-    (oldLevel, quoteLevel) <- getState
-    putState (n : oldLevel, quoteLevel)
+    S (oldLevel, quoteLevel) <- getState
+    putState $ S (n : oldLevel, quoteLevel)
 popIndentLevel :: Parser IndentDepth
 popIndentLevel = do
-    (top : oldLevel, quoteLevel) <- getState
-    putState (oldLevel, quoteLevel)
+    S (top : oldLevel, quoteLevel) <- getState
+    putState $ S (oldLevel, quoteLevel)
     return top
 
 peekQuoteLevel :: Parser QuasiQuoteDepth
 peekQuoteLevel = do
-    level <- liftM snd getState
+    level <- liftM (snd . unState) getState
     return $ case level of { Right x -> x; Left _ -> 0 }
 pushQuoteLevel :: Parser ()
 pushQuoteLevel = do
-    (indentLevel, oldLevel) <- getState
+    S (indentLevel, oldLevel) <- getState
     case oldLevel of
-        Right x -> putState (indentLevel, Right (x+1))
+        Right x -> putState $ S (indentLevel, Right (x+1))
         Left _ -> fail "quasiquotation operator inside quote"
 popQuoteLevel :: Parser ()
 popQuoteLevel = do
-    (indentLevel, oldLevel) <- getState
+    S (indentLevel, oldLevel) <- getState
     case oldLevel of
         Right x -> do
             when (x <= 0) $ failure
-            putState (indentLevel, Right (x-1))
+            putState $ S (indentLevel, Right (x-1))
         Left _ -> failure
     where failure = fail "unquotation operator outside of quasiquote"
 disableQuasiquote :: Parser ()
 disableQuasiquote = do
-    (indentLevel, Right quoteLevel) <- getState
-    putState (indentLevel, Left quoteLevel)
+    S (indentLevel, Right quoteLevel) <- getState
+    putState $ S (indentLevel, Left quoteLevel)
 enableQuasiquote :: Parser ()
 enableQuasiquote = do
-    (indentLevel, Left quoteLevel) <- getState
-    putState (indentLevel, Right quoteLevel)
+    S (indentLevel, Left quoteLevel) <- getState
+    putState $ S (indentLevel, Right quoteLevel)
 
 
 ------ Basic Whitespace ------
-{-| Wrap a token parser in this to consumes whitespace to find the next token. -}
+{-| Wrap a token parser in this to consumes inline whitespace before continuing. -}
 token :: Parser a -> Parser a
 token = (spaces >>)
+{-| Consume whitespace, insensitive of layout (the pattern of indents/dedents and nextlines). -}
+noLayout :: Parser ()
+noLayout = skipMany (choice whitespaceOptions) <?> "space"
 {-| Inspects the next character to determine if it is a clear token-separator.
     Such separators are whitespace, parens, hash (#), and whatever extra characters (passed to the
     combinator) are appropriate for the language at hand.
@@ -206,23 +211,10 @@ gap extraChars = nextCharIsSpace <|> eof <?> "space before next token"
 spaces :: Parser ()
 spaces = skipMany space
 space :: Parser ()
-space = choice [ void (oneOf " \t")
-               , void (char '\\' >> newline)
-               , void blockComment
-               , void lineComment -- must come after block comment
-               ] <?> "space"
-    where
-    lineComment = char '#' >> many (noneOf "\n")
-    blockComment = void $ between (try $ string "#{") (string "}#") (many blockSegment)
-        where
-        blockSegment = choice [ void (noneOf "#}")
-                              , void $ try (char '}' >> lookAhead (noneOf "#"))
-                              , blockComment
-                              , void (char '#' >> noneOf "{") -- must come after block comment
-                              ]
+space = choice (tail whitespaceOptions) <?> "space"
 
 hardNewline :: Parser ()
-hardNewline = void (char '\n')
+hardNewline = head whitespaceOptions
 skipLines :: Parser ()
 skipLines = optional (try newline) --TODO not sure I need this try
 newline :: Parser ()
@@ -234,3 +226,21 @@ newline = oneNewline >> skipNewlines
                <|> (lookAhead (try $ spaces >> eof) >> return True)
                <|> return False
     skipNewlines = isBlankLine >>= \blank -> if blank then newline else return ()
+
+-- this makes available all kinds of whitespace options
+-- the head of the list is a hard newline, the tail is inline whitespace
+whitespaceOptions = [ void (char '\n')
+                    , void (oneOf " \t")
+                    , void (char '\\' >> newline)
+                    , void blockComment
+                    , void lineComment -- must come after block comment
+                    ]
+    where
+    lineComment = char '#' >> many (noneOf "\n")
+    blockComment = void $ between (try $ string "#{") (string "}#") (many blockSegment)
+        where
+        blockSegment = choice [ void (noneOf "#}")
+                              , void $ try (char '}' >> lookAhead (noneOf "#"))
+                              , blockComment
+                              , void (char '#' >> noneOf "{") -- must come after block comment
+                              ]

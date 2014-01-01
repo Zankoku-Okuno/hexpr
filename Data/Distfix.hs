@@ -99,6 +99,7 @@ import Data.Ord
 import Data.List
 import Data.Maybe
 import Data.Either
+import Control.Applicative
 import Control.Monad
 
 
@@ -115,13 +116,14 @@ data Distfix a = Distfix a Topology [a]
 data Topology = Closed | HalfOpenRight | HalfOpenLeft | OpenRight | OpenLeft | OpenNon
 type DistfixTable a = [[Distfix a]]
 
-type Match a = (Distfix a, [a], [[a]], [a])
+newtype Match a = Match { unMatch :: (Distfix a, [a], [[a]], [a]) }
 data MatchResult a = NoMatch
                    | OneMatch (Match a)
                    | Ambiguous [Match a]
-data DistfixError a = AmbiguousErr [Match a]
+data DistfixError a = AmbiguousErr [(Distfix a, [a], [[a]], [a])]
                     | LeftoverErr [a]
-type DistfixResult a = Either (DistfixError a) a
+newtype DistfixResult' e a = Result { unResult :: Either (DistfixError e) a }
+type DistfixResult a = DistfixResult' a a
 
 
 ------ Instances ------
@@ -129,27 +131,27 @@ instance (Show a, DistfixStructure a) => Show (DistfixError a) where
     show (AmbiguousErr matches) = headText ++ concatMap makeLine matches
         where
         headText = "Ambiguous distfix parse. Could have been one of:"
-        makeLine = ("\n\t"++) . show . right . rewrite (Right . rewrap)
-        right (Right x) = x
+        makeLine = ("\n\t"++) . show . right . rewrite (return . rewrap) . Match
+        right (Result (Right x)) = x
     show (LeftoverErr [k]) = "Leftover keyword: " ++ show k
     show (LeftoverErr ks) = "Leftover keywords:" ++ concatMap ((' ':) . show) ks
 
 
 ------ Main Algorithm ------
-runDistfix :: DistfixStructure a => DistfixTable a -> a -> DistfixResult a
+runDistfix :: DistfixStructure a => DistfixTable a -> a -> Either (DistfixError a) a
 runDistfix table x = case unwrap x of
     Nothing -> return x
-    Just xs -> mapM (runDistfix table) xs >>= impl table
+    Just xs -> mapM (runDistfix table) xs >>= unResult . (impl table)
     where
     impl [] xs = findLeftovers allKeywords xs
     impl table'@(row:rows) xs = case resolve row xs of
         NoMatch -> impl rows xs
         OneMatch op -> rewrite (impl table') op
-        Ambiguous ops -> Left $ AmbiguousErr ops
+        Ambiguous ops -> Result . Left . AmbiguousErr $ fmap unMatch ops
     allKeywords = nubBy nodeMatch . (concatMap . concatMap) (\(Distfix _ _ ks) -> ks) $ table
 
 rewrite :: DistfixStructure a => ([a] -> DistfixResult a) -> Match a -> DistfixResult a
-rewrite recurse (Distfix distfix _ _, before, inside, after) = do
+rewrite recurse (Match (Distfix distfix _ _, before, inside, after)) = do
     inside' <- liftM (rewrap . (distfix:)) (mapM recurse inside)
     recurse $ before ++ [inside'] ++ after
 
@@ -170,7 +172,7 @@ resolve ops xs = resolve detectAll []
         where is = (`elem` map (decidePriority x) eqSet)
 
 decidePriority :: Match a -> Match a -> Priority
-decidePriority a@(Distfix _ topA ksA, bA, iA, aA) b@(Distfix _ topB ksB, bB, iB, aB) = case (topA, topB) of
+decidePriority a@(Match (Distfix _ topA ksA, bA, iA, aA)) b@(Match (Distfix _ topB ksB, bB, iB, aB)) = case (topA, topB) of
     (OpenLeft,      OpenLeft)      -> decideLeft
     (OpenLeft,      HalfOpenLeft)  -> decideLeft
     (HalfOpenLeft,  OpenLeft)      -> decideLeft
@@ -205,22 +207,22 @@ decidePriority a@(Distfix _ topA ksA, bA, iA, aA) b@(Distfix _ topB ksB, bB, iB,
         bL = leftmostKeyword b
         bR = rightmostKeyword b
     mostKeywords = fromOrd $ comparing impl a b
-        where impl (Distfix _ _ ks, _, _, _) = length ks
+        where impl (Match (Distfix _ _ ks, _, _, _)) = length ks
     -- index of leftmost keyword in the original node
-    leftmostKeyword (Distfix _ OpenRight _, _, inside, _) = length (head inside)
-    leftmostKeyword (Distfix _ HalfOpenRight _, before, _, _) = length before
-    leftmostKeyword (Distfix _ Closed _, before, _, _) = length before
+    leftmostKeyword (Match (Distfix _ OpenRight _, _, inside, _)) = length (head inside)
+    leftmostKeyword (Match (Distfix _ HalfOpenRight _, before, _, _)) = length before
+    leftmostKeyword (Match (Distfix _ Closed _, before, _, _)) = length before
     -- index of rightmost keyword in the original node
-    rightmostKeyword (Distfix _ OpenLeft _, _, inside, _) = sum (map length $ init inside) + (length (init inside) - 1)
-    rightmostKeyword (Distfix _ HalfOpenLeft _, _, inside, _) = sum (map length inside) + (length inside - 1)
-    rightmostKeyword (Distfix _ Closed _, before, inside, _) = length before + sum (map length inside) + length inside
+    rightmostKeyword (Match (Distfix _ OpenLeft _, _, inside, _)) = sum (map length $ init inside) + (length (init inside) - 1)
+    rightmostKeyword (Match (Distfix _ HalfOpenLeft _, _, inside, _)) = sum (map length inside) + (length inside - 1)
+    rightmostKeyword (Match (Distfix _ Closed _, before, inside, _)) = length before + sum (map length inside) + length inside
 
 
 ------ Detection ------
 findLeftovers :: DistfixStructure a => [a] -> [a] -> DistfixResult a
 findLeftovers ks xs = case filter (\x -> any (nodeMatch x) ks) xs of
-    [] -> return . rewrap $ xs
-    errs -> Left $ LeftoverErr errs
+    [] -> Result . Right . rewrap $ xs
+    errs -> Result . Left $ LeftoverErr errs
 
 detect :: DistfixStructure a => [a] -> Distfix a -> Maybe (Match a)
 detect xs fix@(Distfix _ topology ks) = do
@@ -256,7 +258,7 @@ detect xs fix@(Distfix _ topology ks) = do
                 else return ([], as:res, [])
     if null `any` inside
         then Nothing
-        else return (fix, before, inside, after)
+        else return $ Match (fix, before, inside, after)
 
 detectBody :: DistfixStructure a => [a] -> [a] -> Maybe [[a]]
 detectBody [] xs = Just [xs]
@@ -295,3 +297,8 @@ negOrd :: Ordering -> Ordering
 negOrd LT = GT
 negOrd EQ = EQ
 negOrd GT = LT
+
+
+instance Monad (DistfixResult' e) where
+    return = Result . Right
+    (Result x) >>= k = Result (x >>= unResult . k)
