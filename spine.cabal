@@ -49,12 +49,16 @@ library
   -- Modules exported by the library.
   exposed-modules:     Data.Spine,
                        Data.Spine.Parser,
-                       Data.Distfix
+                       Data.Distfix,
+                       Data.Environment
   
   -- Modules included in this library but not exported.
   -- other-modules:       
   
   -- Other library packages from which modules are imported.
   build-depends:       base ==4.6.*,
-                       parsec >=3.0
+                       mtl ==2.1.*,
+                       transformers ==0.3.*,
+                       parsec ==3.0.*,
+                       STMonadTrans ==0.3.*
   
