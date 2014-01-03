@@ -58,7 +58,6 @@ library
   -- Other library packages from which modules are imported.
   build-depends:       base ==4.6.*,
                        mtl ==2.1.*,
-                       transformers ==0.3.*,
                        parsec ==3.0.*,
-                       STMonadTrans ==0.3.*
+                       data-ref
   
