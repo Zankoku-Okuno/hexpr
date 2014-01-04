@@ -91,7 +91,7 @@ parseSpine = choice [ parseAtom
                     , indentNode, parenNode
                     ]
     where
-    indentNode = between start end (liftM QNode $ parseNode `sepBy1` nextline)
+    indentNode = between start end (liftM QBranch $ parseNode `sepBy1` nextline)
         where
         start = try (optional (char '(') >> indent)
         end = dedent
@@ -102,7 +102,7 @@ parseSpine = choice [ parseAtom
 
 {-| Parse a number of space-separated spines. -}
 parseNode :: QuasispineParser a => Parser (Quasispine a)
-parseNode = liftM QNode (parseSpine `sepEndBy1` spaces)
+parseNode = liftM QBranch (parseSpine `sepEndBy1` spaces)
 
 
 ------ Quote Parser Wrappers ------
