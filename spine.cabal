@@ -50,6 +50,7 @@ library
   exposed-modules:     Data.Spine,
                        Data.Spine.Parser,
                        Data.Distfix,
+                       Data.Gensym,
                        Data.Environment
   
   -- Modules included in this library but not exported.
