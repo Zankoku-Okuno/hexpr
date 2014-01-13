@@ -71,7 +71,7 @@ data Spine a = Leaf a
     Again, this restriction is not enforced by the type system.
 -}
 data Quasispine a = QLeaf      a
-                  | QBranch      [Quasispine a]
+                  | QBranch    [Quasispine a]
                   | Quasiquote (Quasispine a)
                   | Unquote    (Quasispine a)
                   | Splice     (Quasispine a)
