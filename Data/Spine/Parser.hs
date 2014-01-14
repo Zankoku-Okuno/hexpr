@@ -1,246 +1,256 @@
-{- |
-
-Framework for parsing spines using a variant on s-expressions (see below).
-The user provides an instance of `QuasispineParser a`, and is then able to use this module to parse `Spine a`.
-To this end, three node/leaf parsers and two token combinators are provided. Sticking to these high-level functions should allow a fair amount of grammatical space while keeping the grammar simple.
-
-The grammar for normal s-expressions is `start ::= atom | '(' start+ ')'`. 
-To this, we have added quotation (including quasiquotation, unquote, and splicing), but we omit it from the grammar here for clarity.
-The real extension of concrete syntax is that we add the pattern `'('? indent start+ dedent`. Further, each line at the same level of indent is wrapped into a node as well.
-
-Substituting parenthesis for indentation appropriately greatly reduces the need for parenthesis bookeeping and improves readability, without sacrificing the advantages of s-expressions.
-Readers may wonder at the optional paren that may preceed an indent: when two consecutive nodes need to be introduced, a paren may be placed on its own line.
-
-The tokenizers also handle line continuations (backslash-newline), as well as line comments (introduced with `#`) and nested block comments (surounded by `#{` and `}#`).
-A comment or line continuation cound as one space for the purposes of separating tokens.
-
-There are three entry points, which parse a quasispine and perform some amount of tidying up: convertion to a plain spline and simplify.
-
-At the moment, comments are delimited with # and #{ ... }#.
-I'd advise against allowing these patterns in atoms.
-On the other hand, I may decide to parameterize these, at which point, you can mix and match to taste.
-Parenthesis should probably always be kept out of user parsers.
-
--}
-
 module Data.Spine.Parser (
-      QuasispineParser (..)
-    , QuasispineState
-    , Parser
-    
+      SpineParser
+    , SpineLanguage
     , runSpineParser
-    , runQuasispineParser
-    , runComplexSpineParser
+    , SpineParserT
+    , SpineLanguageT(..)
+    , runSpineParserT
 
-    , parseFile
-    , parseNode
+    , atom
+    , separate
+    , parenthesize
+    , space
+    , newline
+
     , parseSpine
-    , token
-    , noLayout
-    , gap
+    , tokenize
+    , nextline
+    , indent
+    , dedent
+    , disableIndentation
+    , withQuasiquote
+    , withUnquote
+    , disableQuasiquotation
     ) where
 
+import Control.Applicative ((<$>), (<*>), (<*), (*>))
 import Control.Monad
-import Text.Parsec hiding (space, spaces, newline, token)
-import Text.Parsec.Char hiding (space, spaces, newline)
+import Control.Monad.Identity
+import Control.Monad.Reader
+import Control.Monad.State
+
+import Text.Parsec hiding (space, newline)
 
 import Data.Spine
 
+------ Types and Entry ------
+{-| Synonym for 'SpineLanguageT' over 'Identity'. -}
+type SpineParser u a r = SpineParserT u a Identity r
+{-| Type for parsers specialized to deal with spines.
+    In this library, 'u' is user state, 'a' is stom type and 'r' is result type.
 
------- Types ------
-class QuasispineParser a where
-    parseAtom :: Parser (Quasispine a)
-    parseQuote :: Parser (Quasispine a)
-    parseQuasiquote :: Parser (Quasispine a)
-    parseUnquote :: Parser (Quasispine a)
-    parseSplice :: Parser (Quasispine a)
-
-
-{-| Type synonym for parsing quasispines. -}
-type Parser = Parsec String QuasispineState
-
-type IndentDepth = Int
-type QuasiQuoteDepth = Int
-newtype QuasispineState = S { unState :: ([IndentDepth], Either QuasiQuoteDepth QuasiQuoteDepth) }
-startState :: QuasispineState
-startState = S ([0], Right 0)
-
-
------- Entry Points ------
-runSpineParser :: (QuasispineParser a, UnQuasispine a, SimplifySpine a) => SourceName -> String -> Either ParseError [Spine a]
-runSpineParser path input = fmap (map $ simplifySpine . unQuasispine) (runQuasispineParser path input)
-
-runQuasispineParser :: (QuasispineParser a) => SourceName -> String -> Either ParseError [Quasispine a]
-runQuasispineParser = runParser parseFile startState
-
-runComplexSpineParser :: (QuasispineParser a, UnQuasispine a) => SourceName -> String -> Either ParseError [Spine a]
-runComplexSpineParser path input = fmap (map unQuasispine) (runQuasispineParser path input)
-
-
------- Main Parsing ------
-{-| Parse a string only of quasispines separated by nextlines.
-    Leading and trailing whitesapce is discarded.
+    In detail, we use a reader to store language configuration and a state monad
+    to track indentation and quotation levels independently of user state.
+    We leave this as a type synonym instead of a @newtype@ so that all the Parsec
+    parsers still work.
 -}
-parseFile :: QuasispineParser a => Parser [Quasispine a]
-parseFile = between skipLines (skipLines >> eof) (parseNode `sepEndBy` nextline)
+type SpineParserT u a m r = ParsecT String u (StateT InnerState (ReaderT (SpineLanguageT u m a) m)) r
 
-{-| Parse a single atom, parethesized/indented node or a (quasi)quoted/unquoted/spliced node. -}
-parseSpine :: QuasispineParser a => Parser (Quasispine a)
-parseSpine = choice [ parseAtom
-                    , _parseQuasiquote, _parseUnquote, _parseSplice, _parseQuote
-                    , indentNode, parenNode
-                    ]
+data InnerState = InnerState { _indent :: Maybe [Integer], _quoteLevel :: Maybe Integer }
+
+startInnerState :: InnerState
+startInnerState = InnerState { _indent = Just [0]
+                             , _quoteLevel = Just 0
+                             }
+
+{-| Synonym for 'SpineLanguageT' for parsers over 'Identity'. -}
+type SpineLanguage u a = SpineLanguageT u Identity a
+{-| Aggregate of parts commonly needed by a 'SpineParserT'.
+
+-}
+data SpineLanguageT u m a = SpineLanguage { _atom         :: [SpineParserT u a m a]
+                                          , _separate     :: SpineParserT u a m ()
+                                          , _parenthesize :: [(SpineParserT u a m (), SpineParserT u a m ())]
+                                          , _space        :: SpineParserT u a m ()
+                                          , _newline      :: SpineParserT u a m ()
+                                          , _lineComment  :: SpineParserT u a m ()
+                                          , _blockComment :: (SpineParserT u a m (), SpineParserT u a m ())
+                                          , _startState   :: u
+                                          }
+
+
+{-| Run a spine parser in the 'Identity' monad without the fuss. -}
+runSpineParser :: SpineLanguage u a -> SpineParser u a r -> SourceName -> String -> Either ParseError r
+runSpineParser language parser source input = runIdentity $ runSpineParserT language parser source input
+
+{-| Given a language configuration, perform a parse of input. -}
+runSpineParserT :: (Monad m) => SpineLanguageT u m a -> SpineParserT u a m r -> SourceName -> String -> m (Either ParseError r)
+runSpineParserT language parser source input = runReaderT (evalStateT parse startInnerState) language
     where
-    indentNode = between start end (liftM QBranch $ parseNode `sepBy1` nextline)
-        where
-        start = try (optional (char '(') >> indent)
-        end = dedent
-    parenNode = between start end parseNode
-        where
-        start = char '('
-        end = token $ char ')'
-
-{-| Parse a number of space-separated spines. -}
-parseNode :: QuasispineParser a => Parser (Quasispine a)
-parseNode = liftM QBranch (parseSpine `sepEndBy1` spaces)
+    parse = runPT parser (_startState language) source input
 
 
------- Quote Parser Wrappers ------
-_parseQuote :: QuasispineParser a => Parser (Quasispine a)
-_parseQuote = liftM Quasiquote $ between disableQuasiquote enableQuasiquote (parseQuote <?> "quotation operator")
+------ Batteries ------
+{-| Parse a spine, using atom, separate and parenthesize.
 
-_parseQuasiquote :: QuasispineParser a => Parser (Quasispine a)
-_parseQuasiquote = liftM Quasiquote (pushQuoteLevel >> parseQuasiquote <?> "quotation operator")
+    Spines are parsed as either an atom, or a `parenthesize`d node. A node, in turn, is one or more
+    spines separated, and optionally terminated, by `separate`.
 
-_parseUnquote :: QuasispineParser a => Parser (Quasispine a)
-_parseUnquote = liftM Unquote (popQuoteLevel >> parseUnquote <?> "quotation operator")
+    In fact, this can parse any hierarchy, but the motivation is to parse spines and quasispines.
+-}
+parseSpine :: (Hierarchy f, Monad m) => SpineParserT u a m (f a)
+parseSpine = leaf <|> branch
+    where
+    leaf = individual <$> atom
+    branch = do
+        (car:cdr) <- parenthesize (parseSpine `sepEndBy1` separate)
+        return $ conjoinsl car cdr
 
-_parseSplice :: QuasispineParser a => Parser (Quasispine a)
-_parseSplice = liftM Splice (popQuoteLevel >> parseSplice <?> "quotation operator")
+{-| Consume \"whitespace\" characters before continuing with the passed parser.
+
+    Whitespace means 'space', line comments (beginning with '_lineComment' and ending before 'newline'),
+    and block comments (nesting between '_blockComment'). When indentation is disabled, 'newline's
+    are also consumed.
+-}
+tokenize :: (Monad m) => SpineParserT u a m r -> SpineParserT u a m r
+tokenize = (inlineSkip >>)
+
+--TODO parse a whole file
+--TODO parse a literate file (do some line-reprocessing first, then change the starting indent level to take accound of the crowsfeet)
+
+--TODO
+--parseIdentifier :: SpineParserT u a m Char -> SpineParserT u a m Char -> (Text -> Bool) -> SpineParserT u a m Text
+--intLiteral :: SpineParserT u a m Integer
+--floatLiteral :: SpineParserT u a m Double --FIXME should be multiple-precision
+--stringLiteralChar :: SpineParserT u a m [Char]
 
 
------- Indentation Parsing ------
-nextline :: Parser ()
+------ Monad Access ------
+{-| Parse an atom: any of the parsers supplied by '_atom'. -}
+atom :: (Monad m) => SpineParserT u a m a
+atom = asks _atom >>= choice
+
+{-| Parse an atom-separator according to '_separate'. -}
+separate :: (Monad m) => SpineParserT u a m ()
+separate = asks _separate >>= id
+
+{-| Perform a parse between the components of one of the elements of '_parenthesize'.
+
+    Specifically, if @'_parenthesize' === [(a b)]@, then @parenthesize p === between a b p@.
+    When multiple elements are given in '_parenthesize', the first applicable is selected.
+-}
+parenthesize :: (Monad m) => SpineParserT u a m r -> SpineParserT u a m r
+parenthesize p = do
+    parens <- asks _parenthesize
+    choice [between before after p | (before, after) <- parens]
+
+{-| Parse a non-newline space according to '_space'. -}
+space :: (Monad m) => SpineParserT u a m ()
+space = asks _space >>= id
+
+{-| Parse a newline according to '_newline'. -}
+newline :: (Monad m) => SpineParserT u a m ()
+newline = asks _newline >>= id
+
+{-| Parse a newline such that the next meaningful line has the same amount of leading whitespace as the previous line.
+    Fails if indentation is disabled.
+-}
+nextline :: (Monad m) => SpineParserT u a m ()
 nextline = (<?> "new line") . try $ do
-    expectedSpaces <- peekIndentLevel
-    leadingSpaces <- lineAndLeading
+    InnerState { _indent = Just (expectedSpaces:_), _quoteLevel = _ } <- get
+    skipToLine
+    leadingSpaces <- toInteger . length <$> many space
     if leadingSpaces == expectedSpaces
         then return ()
-        else fail "expecting same indentation level"
-indent :: Parser ()
-indent = (<?> "indent") . try $ do
-    expectedSpaces <- peekIndentLevel
-    leadingSpaces <- lineAndLeading
-    if leadingSpaces > expectedSpaces
-        then pushIndentLevel leadingSpaces
-        else fail "expecting indent"
-dedent :: Parser ()
-dedent = (<?> "dedent") . try $ do
-    expectedSpaces <- popIndentLevel
-    leadingSpaces <- lookAhead $ try lineAndLeading
-    if leadingSpaces < expectedSpaces
-        then return ()
-        else fail "expected dedent"
+        else parserZero
 
-lineAndLeading :: Parser IndentDepth
-lineAndLeading = do
-    newline
-    depth <- liftM length (many $ char ' ')
-    return depth
-
-
-
------- Query/update indent and quote depths ------
-peekIndentLevel :: Parser IndentDepth
-peekIndentLevel = liftM (head . fst . unState) getState
-pushIndentLevel :: IndentDepth -> Parser ()
-pushIndentLevel n = do
-    S (oldLevel, quoteLevel) <- getState
-    putState $ S (n : oldLevel, quoteLevel)
-popIndentLevel :: Parser IndentDepth
-popIndentLevel = do
-    S (top : oldLevel, quoteLevel) <- getState
-    putState $ S (oldLevel, quoteLevel)
-    return top
-
-peekQuoteLevel :: Parser QuasiQuoteDepth
-peekQuoteLevel = do
-    level <- liftM (snd . unState) getState
-    return $ case level of { Right x -> x; Left _ -> 0 }
-pushQuoteLevel :: Parser ()
-pushQuoteLevel = do
-    S (indentLevel, oldLevel) <- getState
-    case oldLevel of
-        Right x -> putState $ S (indentLevel, Right (x+1))
-        Left _ -> fail "quasiquotation operator inside quote"
-popQuoteLevel :: Parser ()
-popQuoteLevel = do
-    S (indentLevel, oldLevel) <- getState
-    case oldLevel of
-        Right x -> do
-            when (x <= 0) $ failure
-            putState $ S (indentLevel, Right (x-1))
-        Left _ -> failure
-    where failure = fail "unquotation operator outside of quasiquote"
-disableQuasiquote :: Parser ()
-disableQuasiquote = do
-    S (indentLevel, Right quoteLevel) <- getState
-    putState $ S (indentLevel, Left quoteLevel)
-enableQuasiquote :: Parser ()
-enableQuasiquote = do
-    S (indentLevel, Left quoteLevel) <- getState
-    putState $ S (indentLevel, Right quoteLevel)
-
-
------- Basic Whitespace ------
-{-| Wrap a token parser in this to consumes inline whitespace before continuing. -}
-token :: Parser a -> Parser a
-token = (spaces >>)
-{-| Consume whitespace, insensitive of layout (the pattern of indents/dedents and nextlines). -}
-noLayout :: Parser ()
-noLayout = skipMany (choice whitespaceOptions) <?> "space"
-{-| Inspects the next character to determine if it is a clear token-separator.
-    Such separators are whitespace, parens, hash (#), and whatever extra characters (passed to the
-    combinator) are appropriate for the language at hand.
+{-| Parse an indent: next meaningful line has more leading whitespace than the previous line.
+    Fails if indentation is disabled.
 -}
-gap :: String -> Parser ()
-gap extraChars = nextCharIsSpace <|> eof <?> "space before next token"
-    where
-    nextCharIsSpace = void . lookAhead . oneOf $ (" \t\n\\#()" ++ extraChars) --TODO ensure I have all the leading chars of space included
+indent :: (Monad m) => SpineParserT u a m ()
+indent = (<?> "indent") . try $ do
+    InnerState { _indent = Just stack@(expectedSpaces:_), _quoteLevel = ql } <- get
+    skipToLine
+    leadingSpaces <- toInteger . length <$> many space
+    if leadingSpaces > expectedSpaces
+        then put InnerState { _indent = Just (leadingSpaces:stack), _quoteLevel = ql }
+        else parserZero
 
-spaces :: Parser ()
-spaces = skipMany space
-space :: Parser ()
-space = choice (tail whitespaceOptions) <?> "space"
+{-| Parse an indent: next meaningful line has less leading whitespace than the previous line.
+    Fails if indentation is disabled.
 
-hardNewline :: Parser ()
-hardNewline = head whitespaceOptions
-skipLines :: Parser ()
-skipLines = optional (try newline) --TODO not sure I need this try
-newline :: Parser ()
-newline = oneNewline >> skipNewlines
+    If the next line's indentation is less than the last line's, but still more than the
+    previous indent, this is an error. For example, this is not accepted:
+
+@
+zero indent
+    one indent
+  bad indent
+@
+-}
+dedent :: (Monad m) => SpineParserT u a m ()
+dedent = (<?> "dedent") . try $ do
+    InnerState { _indent = Just (_:stack@(expectedSpaces:_)), _quoteLevel = ql} <- get
+    skipToLine
+    leadingSpaces <- toInteger . length <$> lookAhead (many space)
+    if leadingSpaces <= expectedSpaces
+        then put InnerState { _indent = Just stack, _quoteLevel = ql }
+        else parserZero
+
+{-| Turns indentation off, so that 'newline' is consumed by 'tokenize' and 'indent',
+    'dedent' and 'nextline' all fail.
+-}
+disableIndentation :: (Monad m) => SpineParserT u a m r -> SpineParserT u a m r
+disableIndentation p = do
+    st <- get
+    between (put st { _indent = Nothing }) (put st) p
+
+{-| Increase quasiquotation level for the passed parser. -}
+withQuasiquote :: (Monad m) => SpineParserT u a m r -> SpineParserT u a m r
+withQuasiquote p = do
+    st@InnerState { _indent = il, _quoteLevel = Just ql } <- get
+    put InnerState { _indent = il, _quoteLevel = Just (ql + 1) }
+    res <- p
+    put st
+    return res
+
+{-| Decrease quasiquotation level for the passed parser. Fails if quasiquotation level
+    is already at zero.
+-}
+withUnquote :: (Monad m) => SpineParserT u a m r -> SpineParserT u a m r
+withUnquote p = do
+    st@InnerState { _indent = il, _quoteLevel = Just ql } <- get
+    when (ql <= 0) $ fail "Unexpected unquote outside quasiquote."
+    put InnerState { _indent = il, _quoteLevel = Just (ql - 1) }
+    res <- p
+    put st
+    return res
+
+{-| Turns quasiquotation off such that 'withQuasiquote' and 'withUnquote' both fail. -}
+disableQuasiquotation :: (Monad m) => SpineParserT u a m r -> SpineParserT u a m r
+disableQuasiquotation p = do
+    st <- get
+    between (put st { _quoteLevel = Nothing }) (put st) p
+
+
+------ Helpers ------
+inlineSkip :: (Monad m) => SpineParserT u a m ()
+inlineSkip = do
+    InnerState { _indent = depth, _quoteLevel = _ } <- get
+    case depth of
+        Just _  -> skipMany (space <|> lineComment <|> blockComment)
+        Nothing -> skipMany (space <|> newline <|> lineComment <|> blockComment)
+
+skipToLine :: (Monad m) => SpineParserT u a m ()
+skipToLine = oneNewline >> skipBlanklines
     where
-    oneNewline = token (hardNewline <|> eof)
-    isBlankLine =  (lookAhead (try $ token hardNewline) >> return True)
+    oneNewline = tokenize (newline <|> eof)
+    isBlankLine =  (lookAhead (try $ tokenize newline) >> return True)
                <|> (eof >> return False) -- prevents infinite loop from next clause
-               <|> (lookAhead (try $ spaces >> eof) >> return True)
+               <|> (lookAhead (try $ tokenize eof) >> return True)
                <|> return False
-    skipNewlines = isBlankLine >>= \blank -> if blank then newline else return ()
+    skipBlanklines = isBlankLine >>= \blank -> if blank then skipToLine else return ()
 
--- this makes available all kinds of whitespace options
--- the head of the list is a hard newline, the tail is inline whitespace
-whitespaceOptions = [ void (char '\n')
-                    , void (oneOf " \t")
-                    , void (char '\\' >> newline)
-                    , void blockComment
-                    , void lineComment -- must come after block comment
-                    ]
-    where
-    lineComment = char '#' >> many (noneOf "\n")
-    blockComment = void $ between (try $ string "#{") (string "}#") (many blockSegment)
-        where
-        blockSegment = choice [ void (noneOf "#}")
-                              , void $ try (char '}' >> lookAhead (noneOf "#"))
-                              , blockComment
-                              , void (char '#' >> noneOf "{") -- must come after block comment
-                              ]
+lineComment :: (Monad m) => SpineParserT u a m ()
+lineComment = void $ do
+    asks _lineComment >>= id
+    anyChar `manyTill` (lookAhead . try) newline
+
+blockComment :: (Monad m) => SpineParserT u a m ()
+blockComment = do
+        (begin, end) <- asks _blockComment
+        let oneBlock = void $ between (try begin) end (many blockSegment)
+            blockSegment = choice [ void $ anyChar `manyTill` (lookAhead . try) end
+                                  , oneBlock
+                                  ]
+        oneBlock
