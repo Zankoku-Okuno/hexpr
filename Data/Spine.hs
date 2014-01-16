@@ -295,16 +295,18 @@ instance Hierarchy Spine where
     conjoin (Branch as) (Branch bs) = Branch $ as  ++ bs
 
     adjoin a b = Branch [a, b]
+    adjoins x xs = Branch (x:xs)
 
 instance Hierarchy Quasispine where
     individual = QLeaf
     
-    conjoin a@(QLeaf _) b@(QLeaf _)   = QBranch $ [a] ++ [b]
-    conjoin a@(QLeaf _) (QBranch bs)  = QBranch $ [a] ++ bs
-    conjoin (QBranch as) b@(QLeaf _)  = QBranch $ as  ++ [b]
     conjoin (QBranch as) (QBranch bs) = QBranch $ as  ++ bs
+    conjoin (QBranch as) b            = QBranch $ as  ++ [b]
+    conjoin a            (QBranch bs) = QBranch $ [a] ++ bs
+    conjoin a            b            = QBranch $ [a] ++ [b]
 
     adjoin a b = QBranch [a, b]
+    adjoins x xs = QBranch (x:xs)
 
 
 -- | because I'm willing to be unsafe here, just don't export
@@ -367,6 +369,9 @@ class Hierarchy f where
     @
     -}
     adjoin :: f a -> f a -> f a
+
+    {-| Adjoin many nodes in the same level. -}
+    adjoins :: f a -> [f a] -> f a
 
     {-| Conjoin one or more hierarchies.
 
