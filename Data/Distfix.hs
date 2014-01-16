@@ -119,31 +119,19 @@ import Control.Monad
 
     There is one law:
 
-        [Inverse] @maybe node rewrap (unwrap node) === node@
+        [Inverse] @maybe node (\(xs, rewrap) -> rewrap xs) (unwrap node) === node@
 
     In other words, if you can unwrap a node, then rewrapping will perform the inverse.
-
-    In cases where there is more than one sort of branch node in @a@, 'unwrap'ping/'rewrap'ping
-    may need to introduce/eliminate additional elements in order to satisfy the Inverse Law.
-    Importantly, the algorithm must not modify the structure these additional elements.
-    
-    Luckily, there is a simple such introduction/elimination scheme that ought to apply in all
-    cases.
-    
-    * During unwrapping, enclose each \"special\" sort of branch (or every sort, if none is clearly
-    more common than the others) within a node consisting simply of a \"marked\" element (that is,
-    such an element cannot otherwise appear as an element, nor will it match any keyword).
-    
-    * During rewrapping, this additional element can be easily recognized, consumed, and an
-    appropriate node emitted.
 -}
 class DistfixStructure f where
-    {-| Unpack a branch node into a list of that branch's children. -}
-    unwrap :: f -> Maybe [f]
-    {-| Given a list of elements, form a node. Depending on the semantics of the structure,
-        one-element lists might not form a new branch.
+    {-| Unpack a branch node into a list of that branch's children
+        and a rewrapping function. -}
+    unwrap :: f -> Maybe ([f], [f] -> f)
+
+    {-| Workaround so I can give an instance of Show (DistfixError a).
     -}
-    rewrap :: [f] -> f
+    defaultRewrap :: [f] -> f
+    
     {-| Whereas 'match' operates on elements of the structure, 'nodeMatch' is really just
         boilerplate that extracts an element and calls 'match' on it.
 
@@ -233,7 +221,7 @@ instance (Show a, DistfixStructure a) => Show (DistfixError a) where
     show (AmbiguousErr matches) = headText ++ concatMap makeLine matches
         where
         headText = "Ambiguous distfix parse. Could have been one of:"
-        makeLine = ("\n\t"++) . show . right . extract (return . rewrap) . Detection
+        makeLine = ("\n\t"++) . show . right . extract (return . defaultRewrap) defaultRewrap . Detection
         right (Result (Right x)) = x
     show (LeftoverErr [k]) = "Leftover keyword: " ++ show k
     show (LeftoverErr ks) = "Leftover keywords:" ++ concatMap ((' ':) . show) ks
@@ -249,12 +237,12 @@ instance (Show a, DistfixStructure a) => Show (DistfixError a) where
 runDistfix :: DistfixStructure a => DistfixTable a -> a -> Either (DistfixError a) a
 runDistfix table x = case unwrap x of
     Nothing -> return x
-    Just xs -> mapM (runDistfix table) xs >>= unResult . (impl table)
+    Just (xs, rewrap) -> mapM (runDistfix table) xs >>= unResult . (impl rewrap table)
     where
-    impl [] xs = findLeftovers allKeywords xs
-    impl table'@(row:rows) xs = case select row xs of
-        NoMatch -> impl rows xs
-        OneMatch op -> extract (impl table') op
+    impl rewrap [] xs = findLeftovers rewrap allKeywords xs
+    impl rewrap table'@(row:rows) xs = case select row xs of
+        NoMatch -> impl rewrap rows xs
+        OneMatch op -> extract (impl rewrap table') rewrap op
         Ambiguous ops -> Result . Left . AmbiguousErr $ fmap unMatch ops
     allKeywords = nubBy nodeMatch . (concatMap . concatMap) (\(Distfix _ _ ks) -> ks) $ table
 
@@ -266,8 +254,8 @@ runDistfix table x = case unwrap x of
     function that uses extract, so I couldn't just put extract in the closure with impl.
     I'm pretty sure it's necessary to pass the recursion in anyway (but I can't remember why).
 -}
-extract :: DistfixStructure a => ([a] -> DistfixResult a) -> Detection a -> DistfixResult a
-extract recurse (Detection (Distfix distfix _ _, before, inside, after)) = do
+extract :: DistfixStructure a => ([a] -> DistfixResult a) -> ([a] -> a) -> Detection a -> DistfixResult a
+extract recurse rewrap (Detection (Distfix distfix _ _, before, inside, after)) = do
     inside' <- rewrap . (distfix:) <$> mapM recurse inside
     recurse $ before ++ [inside'] ++ after
 
@@ -339,8 +327,8 @@ decidePriority a@(Detection (Distfix _ topA ksA, bA, iA, aA)) b@(Detection (Dist
 
 ------ Detection ------
 {-| Once all possible detections have been found in a node, use this to repack. -}
-findLeftovers :: DistfixStructure a => [a] -> [a] -> DistfixResult a
-findLeftovers ks xs = case filter (\x -> nodeMatch x `any` ks) xs of
+findLeftovers :: DistfixStructure a => ([a] -> a) -> [a] -> [a] -> DistfixResult a
+findLeftovers rewrap ks xs = case filter (\x -> nodeMatch x `any` ks) xs of
     [] -> Result . Right . rewrap $ xs
     errs -> Result . Left $ LeftoverErr errs
 
