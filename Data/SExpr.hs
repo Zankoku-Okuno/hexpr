@@ -1,5 +1,7 @@
 module Data.SExpr (
 	  SExpr(..)
+	, SExprToSpine(..)
+	, sexprToSpine
 	) where
 
 import Data.Spine

@@ -48,6 +48,8 @@ module Data.Spine.Parser (
     , stringLiteralChar
     , parseHereDoc
     , tokenize
+    -- ** Languages
+    , emptyLang
     -- * State Access
     -- ** Indentation
     , nextline
@@ -341,14 +343,27 @@ parseHereDoc prefix = do
     anyChar `manyTill` try terminalLine
 
 ------ Default Languages ------
---TODO
+emptyLang :: (Monad m) => u -> SpineLanguageT u h a m
+emptyLang start = SpineLanguage { _atom = []
+                                , _specialNode = []
+                                , _separate = do
+                                                lookAhead $ oneOf " ()#\n\t"
+                                                tokenize $ return ()
+                                , _indentize = [(indent, dedent)]
+                                , _parenthesize = [(void $ char '(', void $ char ')')]
+                                , _space = void (oneOf " \t") <|> try (void $ string "\\\n")
+                                , _newline = void $ char '\n'
+                                , _lineComment = parserZero
+                                , _blockComment = (parserZero, parserZero)
+                                , _startState = start
+                                }
 
 ------ Monad Access ------
 {-| Parse an atom: any of the parsers supplied by '_atom'. -}
 atom :: (Monad m) => SpineParserT u h a m a
 atom = asks _atom >>= choice
 
-{-| Parse an node of a hierarchy that is neither a leaf nor branch. -}
+{-| Parse a node of a hierarchy that is neither a leaf nor branch. -}
 specialNode :: (Hierarchy h, Monad m) => SpineParserT u h a m (h a)
 specialNode = asks _specialNode >>= choice
 
