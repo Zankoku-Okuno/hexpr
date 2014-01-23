@@ -164,7 +164,7 @@ parseSpine = leaf <|> specialNode <|> indentBranch <|> parenBranch
 parseBareSpine :: (Hierarchy h, Monad m) => SpineParserT u h a m (h a)
 parseBareSpine = do
     (car:cdr) <- parseSpine `sepEndBy1` separate
-    return $ car `conjoinsl` cdr    
+    return $ car `adjoins` cdr    
 
 {-| Parse an 'SExpr' with the same strategy as 'parseSpine'. -}
 parseSExpr :: (Monad m) => SpineParserT u h a m (SExpr a)
@@ -508,7 +508,7 @@ skipToLine = oneNewline >> skipBlanklines
 lineComment :: (Monad m) => SpineParserT u h a m ()
 lineComment = void $ do
     asks _lineComment >>= id
-    anyChar `manyTill` lookAhead (try newline)
+    anyChar `manyTill` lookAhead (try newline <|> eof)
 
 blockComment :: (Monad m) => SpineParserT u h a m ()
 blockComment = do
