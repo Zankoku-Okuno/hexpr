@@ -92,7 +92,7 @@
     @'DistfixElement' SomeType@ and @'DistfixElement' a => 'DistfixStructure' ('Spine' a)@, with
     'nodeMatch' simply unwrapping 'Leaf' and delegating to 'match'.
 -}
-module Data.Distfix (
+module Data.Spine.Distfix (
     -- * Data Structures
       Distfix(..)
     , Shape(..)

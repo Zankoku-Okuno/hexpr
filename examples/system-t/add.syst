@@ -1,2 +1,2 @@
 
-λ (x : Nat) λ (y : Nat) rec f y x i -> ++(f i) --STUB
+λ (x : Nat) λ (y : Nat) rec f y (x : Nat) i -> ++(f i) : Nat -> Nat -> Nat --STUB

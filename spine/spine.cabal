@@ -49,8 +49,9 @@ library
   -- Modules exported by the library.
   exposed-modules:     Data.Spine,
                        Data.Spine.Parser,
+                       Data.Spine.Desugar,
+                       Data.Spine.Distfix,
                        Data.SExpr,
-                       Data.Distfix,
                        Data.Gensym,
                        Data.Environment,
                        Data.Struct

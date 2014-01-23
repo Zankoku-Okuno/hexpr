@@ -17,6 +17,7 @@ import Control.Applicative
 import Control.Monad
 import Data.Spine
 import Data.Spine.Parser
+import Data.Spine.Desugar
 
 
 {-
@@ -43,6 +44,8 @@ run filename = do
         Left err -> return (Left err)
 
 
+type Pos a = (SourcePos, a)
+
 {- # Parsing
 System T doesn't have any meta programming, so we'll just use Spine.
 First, we define our Atom type.
@@ -59,7 +62,6 @@ data Atom = KwNat | KwArr | KwInc | KwLam | KwRec | KwAnn
 {-
 Let's also define some convineinces for later.
 -}
-type AtomPos = (SourcePos, Atom)
 instance Show Atom where
     show (N n) = show n
     show (V v) = unpack v
@@ -78,7 +80,7 @@ Now that we have our Atom type, we can define a SpineLanguageT.
 We won't need to layer this monad, so we can just use SpineLanguage.
 We start with (emptyLang ()) because we don't need any state, and then we give how to parse atoms and line comments.
 -}
-lang :: SpineLanguage Spine AtomPos
+lang :: SpineLanguage Spine (Pos Atom)
 lang = (emptyLang ()) { _atom = [ choice [ kw ":"      KwAnn
                                          , kw "->"     KwArr
                                          , kw "Nat"    KwNat
@@ -106,203 +108,117 @@ Note that there's no problem parsing unicode. Here, both "lambda" and "λ" are a
 Now, I'll just wrap up our language in a simple function so we can use it easily in `run`
 For now, we're just parsing one spine at the top level of a file, without the redundant parens.
 -}
-parser :: FilePath -> String -> Either ParseError (Spine AtomPos)
+parser :: FilePath -> String -> Either ParseError (Spine (Pos Atom))
 parser = runSpineParser lang (parseFile parseBareSpine)
 
 
 {- # Desugar
 -}
-data TypePos = NatPos SourcePos | ArrPos TypePos TypePos
+data TypePos = NatPos SourcePos | ArrPos SourcePos TypePos TypePos
 data ExprPos = VarPos SourcePos Text
              | NumPos SourcePos Integer
              | IncPos SourcePos ExprPos
              | LamPos SourcePos (SourcePos, Text) TypePos ExprPos
              | RecPos SourcePos (SourcePos, Text) ExprPos ExprPos (SourcePos, Text) ExprPos
              | AppPos [ExprPos]
-             | AnnPos ExprPos TypePos
+             | AnnPos SourcePos ExprPos TypePos
 
 instance Show ExprPos where
     show (VarPos _ x) = unpack x
     show (NumPos _ n) = show n
-    show (IncPos _ x) = "++" ++ show x
+    show (IncPos _ x) = "++ " ++ show x
     show (LamPos _ (_, x) t e) = "(\955 (" ++ unpack x ++ " : " ++ show t ++ ") " ++ show e ++ ")" 
     show (RecPos _ (_, f) n z (_, x) e) = "rec " ++ unpack f ++ " " ++ show n ++ " {z => " ++ show z ++ " | ++(" ++ unpack x ++ ") => " ++ show e ++ "}"
     show (AppPos xs) = "(" ++ intercalate " " (map show xs) ++ ")"
-    show (AnnPos e t) = "(" ++ show e ++ " : " ++ show t ++ ")"
+    show (AnnPos _ e t) = "(" ++ show e ++ " : " ++ show t ++ ")"
 instance Show TypePos where
     show (NatPos _) = "Nat"
-    show (ArrPos (NatPos _) r) = "Nat -> " ++ show r
-    show (ArrPos a r) = "(" ++ show a ++ ") -> " ++ show r
+    show (ArrPos _ a r) = "(" ++ show a ++ " -> " ++ show r ++ ")"
 
 
-{-
-When we were parsing, Parsec already wrapped up its errors nice and tidy.
-When desugaring, we don't have this convenience, so let's just quickly define that interface.
--}
 data DesugarError = Err SourcePos String
 
 instance Show DesugarError where
     show (Err pos msg) = "Syntax error in " ++ show pos ++ ".\n" ++ msg
 
-{-
-It's also nice to have a helper function or two (or five).
-The first, getPos, will help us in error reporting.
-The other four will help find our keywords and manipulate the spines they appear in.
--}
-getPos :: Spine AtomPos -> SourcePos
+getPos :: Spine (Pos Atom) -> SourcePos
 getPos (Leaf (pos,_)) = pos
 getPos (Branch (x:_)) = getPos x
 
-findAtom :: Atom -> [Spine AtomPos] -> Maybe Int
-findAtom x xs = match `findIndex` xs
+isKw :: Atom -> Spine (Pos Atom) -> Bool
+isKw kw (Leaf (_, kw')) | kw == kw' = True
+isKw kw _ = False
+
+desugarExpr :: Spine (Pos Atom) -> Either DesugarError (ExprPos)
+desugarExpr = go . implicitParens
     where
-    match (Leaf (_, y)) = x == y
-    match _ = False
-    
-elemAtom :: Atom -> [Spine AtomPos] -> Bool
-elemAtom x = isJust . findAtom x
-
-findAbstraction :: [Spine AtomPos] -> Maybe AtomPos
-findAbstraction xs = case (KwLam `findAtom` xs, KwRec `findAtom` xs) of
-    (Nothing, Nothing) -> Nothing
-    (Just lam, Nothing) -> Just . unleaf $ xs !! lam
-    (Nothing, Just rec) -> Just . unleaf $ xs !! rec
-    (Just lam, Just rec) -> Just $ if lam < rec then unleaf (xs !! lam) else unleaf (xs !! rec)
-    where unleaf (Leaf x) = x
-
-splitOnAtom :: Atom -> [Spine AtomPos] -> ([Spine AtomPos], Spine AtomPos, [Spine AtomPos])
-splitOnAtom x xs = let (as, bs) = break match xs in (as, head bs, tail bs)
-    where
-    match :: Spine AtomPos -> Bool
-    match (Leaf (_,y)) = x == y
-    match _ = False
-
-
-{-
-Now, we put meat on the bones.
-There are actually several contexts where we want to desugar.
-There are expressions, of course, but we also care about types.
-Further, there are some locatinos that must have a particular form.
-For example, the parameter to a lambda abstraction must be of the form `variable : type`.
-We'll be doing this checking as well.
-
-The big idea is to move keywords to the front of nodes and remove extraneous syntax.
-basically, we're getting to a pure Lisp grammar, and we'll deal with special forms later.
-
-Let's begin with expressions, as they're the biggest part of this.
--}
-
-desugarExpr :: Spine AtomPos -> Either DesugarError (ExprPos)
-{- The base case is pretty simple: make sure keywords aren't left on their own, translate the rest. -}
-desugarExpr x@(Leaf (pos, a)) = case a of
-    N n -> Right (NumPos pos n)
-    V x -> Right (VarPos pos x)
-    _ -> Left $ Err (getPos x) ("Unexpected `" ++ show a ++ "'.")
-{-
-Now then, we want to detect keywords in order from least- to most-tightly binding.
-Let's say abstractions (lambda and rec) bind least tightly, then annotations, then incrementing.
-We also shouldn't find `Nat` or `->` in an expression (they're types), so we check for that error while we're here.
-Of course, if we don't find any keywords in a branch, that's no big deal, just recurse down.
--}
-desugarExpr (Branch xs) | isJust (findAbstraction xs) = desugarBinder
-                        | KwAnn `elemAtom` xs = desugarAnn
-                        | KwInc `elemAtom` xs = desugarInc
-                        | KwNat `elemAtom` xs = let (_,x,_) = splitOnAtom KwNat xs
-                                                in Left $ Err (getPos x) ("Unexpected `" ++ show x ++ "'.")
-                        | KwArr `elemAtom` xs = let (_,x,_) = splitOnAtom KwArr xs
-                                                in Left $ Err (getPos x) ("Unexpected `" ++ show x ++ "'.")
-                        | otherwise = AppPos <$> mapM desugarExpr xs
-    where
-    desugarBinder = do
-        let (Just kw) = findAbstraction xs 
-            (as, x, bs) = snd kw `splitOnAtom` xs
-        when (null bs) $ Left $ Err (getPos x) ("Unexpected `" ++ show kw ++ "'.")
-        func <- desugarBind kw (node bs)
-        if null as
-            then Right func
-            else do
-                as' <- mapM desugarExpr as
-                Right $ AppPos (as' ++ [func])
-    desugarAnn = do
-        let (as, x, bs) = KwAnn `splitOnAtom` xs
-        as' <- desugarExpr (node as)
-        bs' <- desugarType (node bs)
-        Right $ AnnPos as' bs'
-    desugarInc = do
-            let (as, x, rest) = KwInc `splitOnAtom` xs
-            (x', bs) <- goIn [IncPos (getPos x)] rest
-            as' <- mapM desugarExpr as
-            --Left $ Err (getPos x) (show $ (as', x', bs'))
-            if null bs
-                then if null as'
-                    then Right x'
-                    else Right $ AppPos (as' ++ [x'])
-                else do
-                    bs' <- desugarExpr (node bs)
-                    Right $ AppPos (as' ++ [x', bs'])
+    implicitParens = addShortParens (isKw KwInc) . addParens isBinder . rightInfix (isKw KwAnn)
+    isBinder x = isKw KwLam x || isKw KwRec x
+    {- The base case is pretty simple: make sure keywords aren't left on their own, translate the rest. -}
+    go x@(Leaf (pos, a)) = case a of
+        N n -> Right $ NumPos pos n
+        V x -> Right $ VarPos pos x
+        _   -> Left $ Err (getPos x) ("Unexpected `" ++ show a ++ "'.")
+    {-
+    For the rest of it, we're taking advantage of special form notation:
+    important keywords will have been moded to the front of a branch.
+    -}
+    go (Branch (x:xs)) | isKw KwAnn x = desugarAnn (getPos x) xs
+                       | isKw KwLam x = desugarLam (getPos x) xs
+                       | isKw KwRec x = desugarRec (getPos x) xs
+                       | isKw KwInc x = desugarInc (getPos x) xs
+                       | otherwise = AppPos <$> mapM desugarExpr (x:xs)
         where
-        goIn as [Leaf (pos, KwInc)] = Left $ Err pos "Expected argument after `++'."
-        goIn as (Leaf (pos, KwInc):bs) = goIn (IncPos pos:as) bs
-        goIn as (b:bs) = do
-            b' <- desugarExpr b
-            return (goOut b' as, bs)
-        goOut acc [] = acc
-        goOut acc (inc:xs) = goOut (inc acc) xs
+        desugarAnn pos [as, bs] = AnnPos pos <$> desugarExpr as <*> desugarType bs
+        desugarLam pos xs = case xs of
+            [] -> Left $ Err pos "Unexpected `\955'."
+            [x] -> Left $ Err pos "Missing function body."
+            
+            (x:e) -> do
+                (x, t) <- getVarBind x
+                LamPos pos x t <$> desugarExpr (node e)
+            where
+            getVarBind x@(Leaf _) = Left $ Err (getPos x) "Expected annotated variable."
+            getVarBind (Branch xs) = tripBy (isKw KwAnn) missingAnn foundAnn xs
+                where
+                missingAnn xs = Left $ Err (getPos (head xs)) "Expected annotated variable."
+                foundAnn [] ann _ = Left $ Err (getPos ann) "Expected variable."
+                foundAnn _ ann [] = Left $ Err (getPos ann) "Expected type after `:'."
+                foundAnn [Leaf (pos, V x)] _ t = do
+                    t' <- desugarType (node t)
+                    Right ((pos, x), t')
+                foundAnn (x:xs) ann _ = Left $ Err (getPos ann) "Expected variable."
+        desugarRec pos xs = case xs of
+            [recvar, start] -> Left $ Err pos "Missing recurrence base case."
+            [recvar, start, zero] -> Left $ Err pos "Missing recurrence relation."
+            [recvar, start, zero, elemvar] -> Left $ Err pos "Missing recurrence relation body."
+            [recvar, start, zero, elemvar, arr] -> Left $ Err pos "Missing recurrence relation body."
+            {- Alright, now `rec` has all the syntactic elements it needs. -}
+            (recvar: start: zero: elemvar: arr: body) -> do
+                getArr arr
+                RecPos pos <$> getVar recvar <*> desugarExpr start
+                    <*> desugarExpr zero
+                    <*> getVar elemvar
+                    <*> desugarExpr (node body)
+            where
+            getVar (Leaf (pos, V f)) = Right (pos, f)
+            getVar x = Left $ Err (getPos x) "Expected variable."
+            getArr (Leaf (_, KwArr)) = Right ()
+            getArr x = Left $ Err (getPos x) "Expected `->'."
+        desugarInc pos xs = case xs of
+            [] -> Left $ Err pos "Unexpected `++'."
+            [e] -> IncPos pos <$> desugarExpr e
 
-desugarType :: Spine AtomPos -> Either DesugarError TypePos
-desugarType (Leaf (pos, KwNat)) = return (NatPos pos)
-desugarType xs = Left $ Err (getPos xs) "STUB desugarType"
-
-desugarBind :: AtomPos -> Spine AtomPos -> Either DesugarError ExprPos
-{- Both kinds of abstraction need arguments. -}
-desugarBind (pos, KwLam) x@(Leaf _) = Left $ Err pos "Expected variable binding."
-desugarBind (pos, KwRec) x@(Leaf _) = Left $ Err pos "Expected recursion binding."
-{-
-Now then, a lambda abstraction is fairly straightforward.
-System T includes the simply typed lambda calculus, and this is all that lambda abstraction is.
-Specifically, the syntax is `λ (<variable> : <type>) <body>`.
-If you aren't familiar with lambda calculus either, we'll see what this means below.
--}
-desugarBind (pos, KwLam) (Branch (var:body)) = do
-        (x, t) <- getVarBind var
-        body' <- desugarExpr (node body)
-        Right $ LamPos pos x t body'
+desugarType :: Spine (Pos Atom) -> Either DesugarError TypePos
+desugarType xs = go $ rightInfix (isKw KwArr) xs
     where
-    getVarBind x@(Leaf _) = Left $ Err (getPos x) "Expected variable binding."
-    getVarBind (Branch xs) = do
-        when (not . isJust $ KwAnn `findAtom` xs) $ Left $ Err (getPos (head xs)) "Expected type annotation on variable binding."
-        let (x, _, t) = KwAnn `splitOnAtom` xs
-        x' <- case x of
-            [Leaf (pos,(V x))] -> Right (pos, x)
-            _ -> Left $ Err (getPos (head x)) "Expected variable."
-        t' <- desugarType (node t)
-        return (x', t')
-{-
-Recursion is a slightly trickier abstraction, but is essentially a recurrence relation.
-Since we haven't introduced definitions, we'll need to introduce a variable so the body has a handle to the recurrence.
-The syntax we're using is `rec <rec-var> <start> <zero> <elem-var> -> <body>`.
-
-First things first, plenty of error checking.
--}
-desugarBind (pos, KwRec) (Branch [recvar, start]) = Left $ Err pos "Missing recurrence base case."
-desugarBind (pos, KwRec) (Branch [recvar, start, zero]) = Left $ Err pos "Missing recurrence relation."
-desugarBind (pos, KwRec) (Branch [recvar, start, zero, elemvar]) = Left $ Err pos "Missing recurrence relation body."
-desugarBind (pos, KwRec) (Branch [recvar, start, zero, elemvar, arr]) = Left $ Err pos "Missing recurrence relation body."
-{- Alright, now `rec` has what it needs. -}
-desugarBind (pos, KwRec) (Branch (recvar:start:zero:elemvar:arr:body)) = do
-    recvar' <- case recvar of
-        Leaf (pos, V f) -> Right (pos, f)
-        _ -> Left $ Err (getPos recvar) "Expected variable."
-    start' <- desugarExpr start
-    zero' <- desugarExpr zero
-    elemvar' <- case elemvar of
-        Leaf (pos, V x) -> Right (pos, x)
-        _ -> Left $ Err (getPos elemvar) "Expected variable."
-    case arr of
-        Leaf (_, KwArr) -> return ()
-        _ -> Left $ Err (getPos elemvar) "Expected `->'."
-    body' <- desugarExpr (node body)
-    Right $ RecPos pos recvar' start' zero' elemvar' body'
+    go ::Spine (Pos Atom) -> Either DesugarError TypePos
+    go x@(Leaf (pos, _))  | isKw KwNat x = Right (NatPos pos)
+                          | otherwise    = Left $ Err (getPos x) "Expecting type."
+    go (Branch [x, a])    | isKw KwArr x = Left $ Err (getPos x) "Missing result type."
+    go (Branch [x, a, r]) | isKw KwArr x = ArrPos (getPos x) <$> desugarType a <*> desugarType r
+    go (Branch (x:xs))    | isKw KwArr x = Left $ Err (getPos x) "Too many arguments to `->'."
+                          | otherwise    = Left $ Err (getPos x) "Expecting type."
 
 
  ------ Typecheck ------
