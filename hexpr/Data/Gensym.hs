@@ -16,6 +16,8 @@ import Control.Monad
 import Control.Monad.Identity
 import Control.Monad.State.Strict
 import Control.Monad.Trans
+import Data.Ref (new, newLifted)
+import qualified Data.Ref as Ref
 
 
 ------ Concepts ------
@@ -83,6 +85,10 @@ instance (Monad m) => Monad (SymbolGenT s m) where
 instance MonadTrans (SymbolGenT s) where
     lift = SymbolGenT . lift
 
+instance (MonadIO m) => MonadIO (SymbolGenT s m) where
+    liftIO = lift . liftIO
+
+instance (Ref.C m) => Ref.C (SymbolGenT s m) where new = newLifted
 
 ------ Transformer Instances ------
     

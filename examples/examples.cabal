@@ -19,8 +19,10 @@ executable runspine
   main-is:              main.hs
   -- other-modules:       
   build-depends:        base ==4.6.*,
+                        data-ref,
                         text ==0.11.*,
                         directory ==1.2.*,
                         parsec ==3.0.*,
-                        either ==3.4.*,
+                        mtl ==2.1.*,
+                        either >=3.4.2,
                         hexpr
