@@ -1,27 +1,27 @@
-module Data.SExpr (
-	  SExpr(..)
-	, SExprToSpine(..)
-	, sexprToSpine
+module Data.Sexpr (
+	  Sexpr(..)
+	, SexprToHexpr(..)
+	, sexprToHexpr
 	) where
 
-import Data.Spine
+import Data.Hexpr
 
 
-data SExpr a = Atom a | SExpr [SExpr a]
+data Sexpr a = Atom a | Sexpr [Sexpr a]
 
 
-class SExprToSpine a where
-	xformNull :: Spine a
+class SexprToHexpr a where
+	xformNull :: Hexpr a
 	xformNull = error "Empty sexprs are disallowed"
-	xformSingleton :: a -> Spine a
+	xformSingleton :: a -> Hexpr a
 
 	xformDeepAtom :: a -> a
 	xformDeepAtom = id
 
-sexprToSpine :: (SExprToSpine a) => SExpr a -> Spine a
-sexprToSpine (Atom x) = Leaf (xformDeepAtom x)
-sexprToSpine (SExpr []) = xformNull
-sexprToSpine (SExpr [Atom x]) = xformSingleton x
-sexprToSpine (SExpr [xs]) = sexprToSpine xs
-sexprToSpine (SExpr xs) = Branch (map sexprToSpine xs)
+sexprToHexpr :: (SexprToHexpr a) => Sexpr a -> Hexpr a
+sexprToHexpr (Atom x) = Leaf (xformDeepAtom x)
+sexprToHexpr (Sexpr []) = xformNull
+sexprToHexpr (Sexpr [Atom x]) = xformSingleton x
+sexprToHexpr (Sexpr [xs]) = sexprToHexpr xs
+sexprToHexpr (Sexpr xs) = Branch (map sexprToHexpr xs)
 

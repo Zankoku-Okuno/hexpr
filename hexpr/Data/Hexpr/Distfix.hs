@@ -6,8 +6,8 @@
     By /rose-like/ data structure, we mean any type @t@ such that when an element of @t@ can be
     'unwrap'ped into a @[t]@, we can perform rewrites according to our distfix algorithm
     and 'rewrap' the result. If a particular element cannot be 'unwrap'ped, then it will be
-    left alone during rewriting. Of course, this library was meant to operate on 'Spines' and
-    'Quasispines', but it could just as well work on a plain list or rose, as well as anything else
+    left alone during rewriting. Of course, this library was meant to operate on 'Hexprs' and
+    'Quasihexprs', but it could just as well work on a plain list or rose, as well as anything else
     you're willing to mangle into shape.
 
     A distributed affix consists of a number of alternating /keywords/ and /slots/. While keywords
@@ -89,10 +89,10 @@
 
     The two-typeclass system might seem a bit strange, but this is so I can avoid making the user
     involve ghc's @FlexibleInstances@ extension. So, give an instance for
-    @'DistfixElement' SomeType@ and @'DistfixElement' a => 'DistfixStructure' ('Spine' a)@, with
+    @'DistfixElement' SomeType@ and @'DistfixElement' a => 'DistfixStructure' ('Hexpr' a)@, with
     'nodeMatch' simply unwrapping 'Leaf' and delegating to 'match'.
 -}
-module Data.Spine.Distfix (
+module Data.Hexpr.Distfix (
     -- * Data Structures
       Distfix(..)
     , Shape(..)
@@ -138,7 +138,7 @@ class DistfixStructure f where
         For example, we might write
         
 @
-    instance 'DistfixDetect' a => 'DistfixStructure' ('Spine' a)
+    instance 'DistfixDetect' a => 'DistfixStructure' ('Hexpr' a)
         nodeMatch ('Leaf' x) ('Leaf' y) = match x y
         nodeMatch _ _ = False
 @

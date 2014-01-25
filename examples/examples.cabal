@@ -5,7 +5,7 @@ name:                hexpr-examples
 version:             0.0.0.0
 synopsis:            Examples for how to develop programming languages with the hexpr library
 -- description:         
-homepage:            github.com/Zankoku-Okuno/spine
+homepage:            github.com/Zankoku-Okuno/hexpr
 license:             PublicDomain
 license-file:        LICENSE
 author:              Zankoku Okuno

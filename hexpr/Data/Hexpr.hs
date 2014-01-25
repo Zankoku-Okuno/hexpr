@@ -1,12 +1,12 @@
 --TODO some sort of Homoiconic class, which can is required for Functor so that fmap can delve into code objects
 -- well, required for functor might be too strong, instead provide a some sort of hmap that can delve, but requires Functor and Homoiconic
-{-| Spines are a data structure for representing and storing first-class code objects in a
+{-| Hexprs are a data structure for representing and storing first-class code objects in a
     strongly-, statically-typed language.
 
     In an untyped language, first-class code may be represented by simple lists, which may then
     hold both atomic values as well as other lists. As code objects will need to be manipulated
     regularly, untyped lists (or @[∀a.a]@, if you prefer) are insufficient in a statically typed
-    language. We therefore introduce 'Spine's, which is the type of the extended context-free
+    language. We therefore introduce 'Hexpr's, which is the type of the extended context-free
     grammar family @S ::= @/atom/@ | (SS@/+/@)@.
 
     By contrast, the grammar of s-exprs is @S ::= @/atom/@ | (SS@/*/@)@, which also has an
@@ -16,30 +16,30 @@
     I'm at it, I may as well say the grammar of roses is @S ::= @/atom/@ | @/atom/@(S@/*/@)@.
 
     Because languages with first-class code benefit greatly from quasiquotation, we also introduce
-    the 'Quasispine', which is isomorphic to 'Spine'. We give algorithms for encoding quasispines
-    into spines, see 'UnQuasispine' and 'SimplifySpine' for more detail. The other direction is
+    the 'Quasihexpr', which is isomorphic to 'Hexpr'. We give algorithms for encoding quasihexprs
+    into hexprs, see 'UnQuasihexpr' and 'SimplifyHexpr' for more detail. The other direction is
     considered only useful in theoretical work.
 
     Because we are programming in Haskell, and not Idris, I have decided to leave some invariants
-    out of the type system. The documentation of 'Spine' and 'Quasispine' give these invariants.
+    out of the type system. The documentation of 'Hexpr' and 'Quasihexpr' give these invariants.
     It would make pattern matching too cumbersome to encode these invariants, and some would even
     need extensions. If I were to instead hide the unsafety, it would make pattern matching
     impossible. 
 -}
-module Data.Spine (
+module Data.Hexpr (
     -- * Primary Data Structures
-      Spine(..)
-    , Quasispine(..)
+      Hexpr(..)
+    , Quasihexpr(..)
     -- ** General Classes
     , Hierarchy(..)
     -- ** Smart Constructors
     , node
     , quasinode
     -- * Translation
-    , unQuasispine
-    , simplifySpine
-    , UnQuasispine(..)
-    , SimplifySpine(..)
+    , unQuasihexpr
+    , simplifyHexpr
+    , UnQuasihexpr(..)
+    , SimplifyHexpr(..)
     ) where
 
 import Data.List
@@ -47,58 +47,58 @@ import Control.Applicative
 
 
 ------ Types ------
-{-| Whereas a rose contains an element at every level of organization, elements of a spine appear
+{-| Whereas a rose contains an element at every level of organization, elements of a hexpr appear
     only in the leaves of the structure. That is, internal nodes (branches) are only responsible
     for grouping consecutive elements and other groups.
 
-    Spines further disallow trivial branches, where trivial means containing zero of one children.
+    Hexprs further disallow trivial branches, where trivial means containing zero of one children.
     Where there are zero children in a branch, the branch contains no information. Where a branch
     contains only one node, no extra grouping information is provided. As branches are responsible
     for grouping, and grouping alone, it does not make sense to allow branches that contain no
     grouping structure.
     These restrictions on the number of children in a branch are not currently enforced by the
-    type system, so several functions on spines are properly partial.
+    type system, so several functions on hexprs are properly partial.
 -}
-data Spine a = Leaf a
-             | Branch [Spine a]
+data Hexpr a = Leaf a
+             | Branch [Hexpr a]
     deriving (Eq)
 
-{-| A Quasispine extends 'Spine' with quasiquotation.
+{-| A Quasihexpr extends 'Hexpr' with quasiquotation.
     
-    In addition to the usual restrictions on spines, each 'Unquote' and 'Splice' element must be
+    In addition to the usual restrictions on hexprs, each 'Unquote' and 'Splice' element must be
     contained within a matching 'Quasiquote' ancestor. Each Quasiquote can match with multiple
     (or zero) Unquote and Splice nodes, just so long as there is no other Quasiquote between.
     Again, this restriction is not enforced by the type system.
 -}
-data Quasispine a = QLeaf      a
-                  | QBranch    [Quasispine a]
-                  | Quasiquote (Quasispine a)
-                  | Unquote    (Quasispine a)
-                  | Splice     (Quasispine a)
+data Quasihexpr a = QLeaf      a
+                  | QBranch    [Quasihexpr a]
+                  | Quasiquote (Quasihexpr a)
+                  | Unquote    (Quasihexpr a)
+                  | Splice     (Quasihexpr a)
     deriving (Eq)
 
 
 ------ Data Manipulation ------
-{-| Turn a list of 'Spine's into a single one, avoiding trivial branches.
+{-| Turn a list of 'Hexpr's into a single one, avoiding trivial branches.
     Of course, the only way to avoid a trivial branch in @node []@ is to reduce to @&#x22A5;@,
     so avoid that.
 -}
-node :: [Spine a] -> Spine a
-node [] = error "spine nodes must have at least one element"
+node :: [Hexpr a] -> Hexpr a
+node [] = error "hexpr nodes must have at least one element"
 node [x] = x
 node xs = Branch xs
 
-{-| As 'node', but for quasispines.
+{-| As 'node', but for quasishexpr.
     Obviously, no 'Quasiquote', 'Unquote' or 'Splice' nodes can be returned.
 -}
-quasinode :: [Quasispine a] -> Quasispine a
-quasinode [] = error "quasispine nodes must have at least one element"
+quasinode :: [Quasihexpr a] -> Quasihexpr a
+quasinode [] = error "quasihexpr nodes must have at least one element"
 quasinode [x] = x
 quasinode xs = QBranch xs
 
 
------- Spine Transforms ------
-{-| Implement this class to allow quasispines to be transformed into spines by @unQuasispine@.
+------ Hexpr Transforms ------
+{-| Implement this class to allow quasihexprs to be transformed into hexprs by 'unQuasishexpr'.
 
     The transformation will map 'Quasiquote', 'Unquote' and 'Splice' nodes into special 'Branches'
     whose first element is is a /special form/. That is:
@@ -107,7 +107,7 @@ quasinode xs = QBranch xs
 
     * the semantics of the form should not depend on context,
 
-    * and when translating the spine into a richer syntax, the form will disappear in favor of the
+    * and when translating the hexpr into a richer syntax, the form will disappear in favor of the
       form's siblings being enclosed in some specific type of grammatical node.
 
     This sort of transformation should make it very easy to detect and handle the resulting
@@ -118,11 +118,11 @@ quasinode xs = QBranch xs
         
         [Concat] unwrap some input code objects, and construct a single code object from the parts.
 -}
-class UnQuasispine a where
-    {-| Create a code literal from its (exactly one) sibling spine. -}
+class UnQuasihexpr a where
+    {-| Create a code literal from its (exactly one) sibling hexpr. -}
     quoteForm  :: a
-    {-| A vararg function that creates a single spine node from some code values (at least one)
-        where the values are obtained by evaluating sibling spines.
+    {-| A vararg function that creates a single hexpr node from some code values (at least one)
+        where the values are obtained by evaluating sibling hexprs.
 
         That is, given @('nodeForm' \<e_1\> ... \<e_n\>)@ with @n >= 1@, then if each @e_i@
         reduces to a code value @v_i@, then construct a code value equivalent to
@@ -138,9 +138,9 @@ class UnQuasispine a where
     -}
     concatForm :: a
 
-{-| Transform a quasispine into a spine. When the input consists only of 'QLeaf' and 'QBranch'
+{-| Transform a quasihexpr into a hexpr. When the input consists only of 'QLeaf' and 'QBranch'
     nodes, the transformation is trivial. However, 'Quasiquote', 'Unquote' and 'Splice' need to
-    be specially encoded. See 'UnQuasispine' for more detail on the encoding used. Otherwise, we
+    be specially encoded. See 'UnQuasihexpr' for more detail on the encoding used. Otherwise, we
     use the following transformations:
 
     * A quasiquoted leaf is a the leaf wrapped in a 'quoteForm'.
@@ -155,10 +155,10 @@ class UnQuasispine a where
     interesting, but not helpful for understanding the results if you already understand
     quasiquotation.
 -}
-unQuasispine :: UnQuasispine a => Quasispine a -> Spine a
-unQuasispine = trans . impl . normalize
+unQuasihexpr :: UnQuasihexpr a => Quasihexpr a -> Hexpr a
+unQuasihexpr = trans . impl . normalize
     where
-    impl :: (UnQuasispine a) => Quasispine a -> Quasispine a
+    impl :: (UnQuasihexpr a) => Quasihexpr a -> Quasihexpr a
     impl (QBranch xs)                = QBranch (impl <$> xs)
     impl (Quasiquote (QLeaf x))      = QBranch [QLeaf quoteForm, QLeaf x]
     impl (Quasiquote (QBranch xs))   = unquasiquoteBranch xs
@@ -166,11 +166,11 @@ unQuasispine = trans . impl . normalize
     impl (Quasiquote (Unquote x))    = impl x
     impl (Quasiquote (Splice x))     = impl x
     impl x = x
-    trans :: Quasispine a -> Spine a
+    trans :: Quasihexpr a -> Hexpr a
     trans (QLeaf x)  = Leaf x
     trans (QBranch xs) = Branch (map trans xs)
     trans (Quasiquote _) = error "tried to translate quasiquote"
-    normalize :: Quasispine a -> Quasispine a
+    normalize :: Quasihexpr a -> Quasihexpr a
     normalize a = case a of
         QLeaf x      -> a
         QBranch [x]  -> normalize x
@@ -194,14 +194,14 @@ unQuasispine = trans . impl . normalize
                 then (let [x] = xs in pushQuote x)
                 else QBranch (QLeaf nodeForm : map pushQuote xs)
             isSplice xs = case xs of { [Splice _] -> True; _ -> False }
-    pushQuote :: (UnQuasispine a) => Quasispine a -> Quasispine a
+    pushQuote :: (UnQuasihexpr a) => Quasihexpr a -> Quasihexpr a
     pushQuote = impl . Quasiquote
 
 --FIXME I can generalize this to: class ?Homoiconic? f where {toAtom :: f a -> a; fromAtom :: a -> Maybe (f a)}
-{-| Implement this class to allow simplification of some spines generated by @unQuasiSpine@. See
-    'simplifySpine' for more details on exactly what transformations are performed.
+{-| Implement this class to allow simplification of some hexprs generated by @unQuasiSpine@. See
+    'simplifyHexpr' for more details on exactly what transformations are performed.
 
-    In order to simplify a spine, we require that any spine, no matter how complex, may be turned
+    In order to simplify a hexpr, we require that any hexpr, no matter how complex, may be turned
     into a single term of the type parameter, @a@. Further, 'toCode' and 'fromCode' are nearly
     inverses of each other.
 
@@ -210,19 +210,19 @@ unQuasispine = trans . impl . normalize
     'toCode' ('fromCode' x) === id      whenever 'isCode' x
     @
 -}
-class (Eq a, UnQuasispine a) => SimplifySpine a where
+class (Eq a, UnQuasihexpr a) => SimplifyHexpr a where
     {-| Whether an atom is a code atom. -}
     isCode   :: a -> Bool
-    {-| Create a code atom from a 'Spine'. -}
-    toCode   :: Spine a -> a
-    {-| Extract the 'Spine' from a code atom.
+    {-| Create a code atom from a 'Hexpr'. -}
+    toCode   :: Hexpr a -> a
+    {-| Extract the 'Hexpr' from a code atom.
 
         This method need only be total over the refinement type @{x :: a | 'isCode' x}@, not the
         plain type @a@.
     -}
-    fromCode :: a -> Spine a
+    fromCode :: a -> Hexpr a
 
-{-| The @unQuasispine@ algorithm usually produces spines that are more complex than is necessary.
+{-| The @unQuasihexpr@ algorithm usually produces hexprs that are more complex than is necessary.
     This function factors @quoteForm@s, @nodeForm@s and @concatForm@s to eliminate redundancy.
 
     Assuming that 'fromCode' does not fail in the transformations, the particular transforms made
@@ -239,9 +239,9 @@ class (Eq a, UnQuasispine a) => SimplifySpine a where
         with @conjoins xs = head xs 'conjoinsl' tail xs@
 
     TODO: The following are unimplemented, but shouldn't matter too much.
-    However, ideally the set of Spines returned from this function should be
-    a proper subset of Spines (i.e. a normal form) that is isomorphic to Quasispine.
-    Probably, once the isomorphism is proven, I'll merge this in with unQuasispine
+    However, ideally the set of Hexprs returned from this function should be
+    a proper subset of Hexprs (i.e. a normal form) that is isomorphic to Quasihexpr.
+    Probably, once the isomorphism is proven, I'll merge this in with unQuasihexpr
 
     * @('nodeForm' x1 ... xm) ('quoteForm' xn)@ ---> @('nodeForm' x1 ... xm xn)@
 
@@ -250,22 +250,22 @@ class (Eq a, UnQuasispine a) => SimplifySpine a where
     * Any immediate siblings of nodeForm-lead branches are pushed into the nodeForm just so long as
         the parent is not a concatForm-lead branch.
 -}
-simplifySpine :: SimplifySpine a => Spine a -> Spine a
-simplifySpine x = case x of
+simplifyHexpr :: SimplifyHexpr a => Hexpr a -> Hexpr a
+simplifyHexpr x = case x of
         Leaf x         -> Leaf x
-        Branch (x:[])  -> simplifySpine x
-        Branch (q:[x]) | q == Leaf quoteForm -> toCode' $ simplifySpine x
+        Branch (x:[])  -> simplifyHexpr x
+        Branch (q:[x]) | q == Leaf quoteForm -> toCode' $ simplifyHexpr x
         Branch (n:xs)  | n == Leaf nodeForm  ->
-                        let xs' = simplifySpine <$> xs
+                        let xs' = simplifyHexpr <$> xs
                         in if isCode' `all` xs'
-                           then toCode' . simplifySpine . Branch $ fromCode' <$> xs'
+                           then toCode' . simplifyHexpr . Branch $ fromCode' <$> xs'
                            else n `conjoin` Branch xs'
         Branch (c:xs)  | c == Leaf concatForm ->
-                        let xs' = simplifySpine <$> xs
+                        let xs' = simplifyHexpr <$> xs
                         in if isCode' `all` xs'
                            then toCode' $ conjoins (fromCode' <$> xs')
                            else c `conjoin` Branch xs'
-        Branch xs      -> Branch (simplifySpine <$> xs)
+        Branch xs      -> Branch (simplifyHexpr <$> xs)
     where
     isCode' (Leaf x) = isCode x
     isCode' _ = False
@@ -274,19 +274,19 @@ simplifySpine x = case x of
 
 ------ Instances ------
 --TODO this won't work if there's internal structure in the Leaves
---perhaps if I use `toCode :: Spine a -> Spine a`, then we needn't worry about internal structure so much`
-instance Functor Spine where
+--perhaps if I use `toCode :: Hexpr a -> Hexpr a`, then we needn't worry about internal structure so much`
+instance Functor Hexpr where
     fmap f (Leaf x) = Leaf (f x)
     fmap f (Branch xs) = Branch $ (map . fmap) f xs
 
-instance Functor Quasispine where
+instance Functor Quasihexpr where
     fmap f (QLeaf x) = QLeaf (f x)
     fmap f (QBranch xs) = QBranch $ (map . fmap) f xs
     fmap f (Quasiquote x) = Quasiquote (fmap f x)
     fmap f (Unquote x) = Unquote (fmap f x)
     fmap f (Splice x) = Splice (fmap f x)
 
-instance Hierarchy Spine where
+instance Hierarchy Hexpr where
     individual = Leaf
     
     conjoin a@(Leaf _) b@(Leaf _)   = Branch $ [a] ++ [b]
@@ -297,7 +297,7 @@ instance Hierarchy Spine where
     adjoin a b = Branch [a, b]
     adjoins x xs = Branch (x:xs)
 
-instance Hierarchy Quasispine where
+instance Hierarchy Quasihexpr where
     individual = QLeaf
     
     conjoin (QBranch as) (QBranch bs) = QBranch $ as  ++ bs
@@ -351,7 +351,7 @@ conjoins xs = head xs `conjoinsl` tail xs
     Some hierarchies may be commutative in conjoin and/or adjoin. For example, file systems
     (ignoring links) are hierarchies: adjoin creates new directories (though it is not
     the only way), and 'conjoin' adds files/directories into an existing directory, or creates a
-    new two-element directory. Clearly, conjoin is commutative here. In 'Spine's, neither operation
+    new two-element directory. Clearly, conjoin is commutative here. In 'Hexpr's, neither operation
     is commutative.
 -}
 class Hierarchy f where

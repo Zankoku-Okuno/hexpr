@@ -3,7 +3,7 @@ In this file, we're parsing, typechecking and interpreting Gödel's System T, wh
 If that doesn't make sense yet, don't worry about it, we'll learn as we go along.
 
 First things first, let's put together the module boilerplate.
-We'll need Some basic data types, a little Parsec and some monadic utilities, and of course the Spine tools.
+We'll need Some basic data types, a little Parsec and some monadic utilities, and of course the Hexpr tools.
 -}
 
 module Language.SystemT (run) where
@@ -17,9 +17,9 @@ import Text.Parsec ( ParseError, SourcePos, getPosition
 import Control.Applicative
 import Control.Monad
 import Control.Monad.Trans.Either
-import Data.Spine
-import Data.Spine.Parser
-import Data.Spine.Desugar
+import Data.Hexpr
+import Data.Hexpr.Parser
+import Data.Hexpr.Desugar
 import Data.Gensym
 import Data.Environment
 
@@ -32,14 +32,14 @@ run :: FilePath -> IO (Either String ())
 run filename = do
     contents <- readFile filename
     let result = do
-        rawSpine <- case parser filename contents of
+        rawHexpr <- case parser filename contents of
             Left err -> Left (show err)
             Right val -> Right val
-        cookedSpine <- case desugarExpr rawSpine of
+        cookedHexpr <- case desugarExpr rawHexpr of
             Left err -> Left (show err)
             Right val -> Right val
         normalForm <- return () --STUB
-        Right (snd <$> rawSpine, cookedSpine, normalForm)
+        Right (snd <$> rawHexpr, cookedHexpr, normalForm)
     case result of
         Right (raw, cooked, val) -> do
             putStr ">> " >> print raw
@@ -51,7 +51,7 @@ run filename = do
 type Pos a = (SourcePos, a)
 
 {- # Parsing
-System T doesn't have any meta programming, so we'll just use Spine.
+System T doesn't have any meta programming, so we'll just use Hexpr.
 First, we define our Atom type.
 You can see several Kw... constructors, these are simply keywords.
 There's also a constructor for natural number literals (N) and variables (V).
@@ -75,16 +75,16 @@ instance Show Atom where
     show KwLam = "\955"
     show KwRec = "rec"
     show KwAnn = ":"
-instance Show a => Show (Spine a) where
+instance Show a => Show (Hexpr a) where
     show (Leaf x) = show x
     show (Branch xs) = "(" ++ intercalate " " (map show xs) ++ ")"
 
 {-
-Now that we have our Atom type, we can define a SpineLanguageT.
-We won't need to layer this monad, so we can just use SpineLanguage.
+Now that we have our Atom type, we can define a HexprLanguageT.
+We won't need to layer this monad, so we can just use HexprLanguage.
 We start with (emptyLang ()) because we don't need any state, and then we give how to parse atoms and line comments.
 -}
-lang :: SpineLanguage Spine (Pos Atom)
+lang :: HexprLanguage Hexpr (Pos Atom)
 lang = (emptyLang ()) { _atom = [ choice [ kw ":"      KwAnn
                                          , kw "->"     KwArr
                                          , kw "Nat"    KwNat
@@ -110,10 +110,10 @@ Note that there's no problem parsing unicode. Here, both "lambda" and "λ" are a
 
 {-
 Now, I'll just wrap up our language in a simple function so we can use it easily in `run`
-For now, we're just parsing one spine at the top level of a file, without the redundant parens.
+For now, we're just parsing one hexpr at the top level of a file, without the redundant parens.
 -}
-parser :: FilePath -> String -> Either ParseError (Spine (Pos Atom))
-parser = runSpineParser lang (parseFile parseBareSpine)
+parser :: FilePath -> String -> Either ParseError (Hexpr (Pos Atom))
+parser = runHexprParser lang (parseFile parseBareHexpr)
 
 
 {- # Desugar
@@ -145,15 +145,15 @@ data DesugarError = Err SourcePos String
 instance Show DesugarError where
     show (Err pos msg) = "Syntax error in " ++ show pos ++ ".\n" ++ msg
 
-getPos :: Spine (Pos Atom) -> SourcePos
+getPos :: Hexpr (Pos Atom) -> SourcePos
 getPos (Leaf (pos,_)) = pos
 getPos (Branch (x:_)) = getPos x
 
-isKw :: Atom -> Spine (Pos Atom) -> Bool
+isKw :: Atom -> Hexpr (Pos Atom) -> Bool
 isKw kw (Leaf (_, kw')) | kw == kw' = True
 isKw kw _ = False
 
-desugarExpr :: Spine (Pos Atom) -> Either DesugarError (ExprPos)
+desugarExpr :: Hexpr (Pos Atom) -> Either DesugarError (ExprPos)
 desugarExpr = go . implicitParens
     where
     implicitParens = addShortParens (isKw KwInc) . addParens isBinder . rightInfix (isKw KwAnn)
@@ -213,10 +213,10 @@ desugarExpr = go . implicitParens
             [] -> Left $ Err pos "Unexpected `++'."
             [e] -> IncPos pos <$> desugarExpr e
 
-desugarType :: Spine (Pos Atom) -> Either DesugarError TypePos
+desugarType :: Hexpr (Pos Atom) -> Either DesugarError TypePos
 desugarType = go . rightInfix (isKw KwArr)
     where
-    go ::Spine (Pos Atom) -> Either DesugarError TypePos
+    go ::Hexpr (Pos Atom) -> Either DesugarError TypePos
     go x@(Leaf (pos, _))  | isKw KwNat x = Right (NatPos pos)
                           | otherwise    = Left $ Err (getPos x) "Expecting type."
     go (Branch [x, a])    | isKw KwArr x = Left $ Err (getPos x) "Missing result type."

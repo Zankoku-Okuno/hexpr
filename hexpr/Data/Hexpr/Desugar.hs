@@ -1,4 +1,4 @@
-module Data.Spine.Desugar (
+module Data.Hexpr.Desugar (
       tripBy
     , tripByEnd
     , addParens
@@ -8,7 +8,7 @@ module Data.Spine.Desugar (
     ) where
 
 import Data.List
-import Data.Spine
+import Data.Hexpr
 
 tripBy :: (a -> Bool) -> ([a] -> b) -> ([a] -> a -> [a] -> b) -> [a] -> b
 tripBy p onNo onYes xs = case break p xs of
@@ -21,14 +21,14 @@ tripByEnd p onNo onYes xs = case break p (reverse xs) of
     (rAfter, rBefore) -> onYes (reverse rBefore) (last rAfter) (reverse $ init rAfter)
 
 --FIXME generalize
-addParens :: (Spine a -> Bool) -> Spine a -> Spine a
+addParens :: (Hexpr a -> Bool) -> Hexpr a -> Hexpr a
 addParens p x@(Leaf _)  = x
 addParens p (Branch xs) = tripBy p node onYes xs
     where
     onYes before x after = node (before ++ [node (x:after)])
 
 --FIXME generalize
-addShortParens :: (Spine a -> Bool) -> Spine a -> Spine a
+addShortParens :: (Hexpr a -> Bool) -> Hexpr a -> Hexpr a
 addShortParens p x@(Leaf _)  = x
 addShortParens p (Branch xs) = tripBy p node onYes xs
     where
@@ -42,7 +42,7 @@ addShortParens p (Branch xs) = tripBy p node onYes xs
         deepen acc (x:xs) = deepen (node [x, acc]) xs
 
 --FIXME generalize
-leftInfix :: (Spine a -> Bool) -> Spine a -> Spine a
+leftInfix :: (Hexpr a -> Bool) -> Hexpr a -> Hexpr a
 leftInfix p x@(Leaf _)  = x
 leftInfix p (Branch xs) = tripByEnd p node onYes xs
     where
@@ -51,7 +51,7 @@ leftInfix p (Branch xs) = tripByEnd p node onYes xs
     onYes before x after = node [x, leftInfix p (node before), node after]
 
 --FIXME generalize
-rightInfix :: (Spine a -> Bool) -> Spine a -> Spine a
+rightInfix :: (Hexpr a -> Bool) -> Hexpr a -> Hexpr a
 rightInfix p x@(Leaf _)  = x
 rightInfix p (Branch xs) = tripBy p node onYes xs
     where

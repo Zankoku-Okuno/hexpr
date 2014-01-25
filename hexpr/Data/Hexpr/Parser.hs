@@ -1,29 +1,29 @@
-{-| Convenience library for parsing 'Spine's, or 'Hierarchy's more generally.
+{-| Convenience library for parsing 'Hexpr's, or 'Hierarchy's more generally.
 
     We've built this on the 'Parsec' library and kept the parsing monad implementation
     public, so all your familiar parsing functions work.
 
     The use case we're aiming for is:
 
-    * Define a 'SpineLanguageT',
+    * Define a 'HexprLanguageT',
 
-    * Define a top-level parser (perhaps just 'parseSpine', or @'parseBareSpine' \`sepEndBy\` 'nextline'@),
+    * Define a top-level parser (perhaps just 'parseHexpr', or @'parseBareHexpr' \`sepEndBy\` 'nextline'@),
 
     * Wrap the top-level parser in 'parseFile' or 'parseLiteralFile',
 
-    * Use 'runSpineParserT'.
+    * Use 'runHexprParserT'.
 
 -}
-module Data.Spine.Parser (
+module Data.Hexpr.Parser (
     -- * Framework
-      SpineParser
-    , SpineLanguage
-    , GenSpineLanguage
-    , runSpineParser
+      HexprParser
+    , HexprLanguage
+    , GenHexprLanguage
+    , runHexprParser
     -- ** Monad Transformer
-    , SpineParserT
-    , SpineLanguageT(..)
-    , runSpineParserT
+    , HexprParserT
+    , HexprLanguageT(..)
+    , runHexprParserT
     , InnerState
     -- ** Language Access
     , atom
@@ -38,9 +38,9 @@ module Data.Spine.Parser (
     , parseFile
     , parseLiterateFile
     -- ** Parsing Hierarchies
-    , parseSpine
-    , parseBareSpine
-    , parseSExpr
+    , parseHexpr
+    , parseBareHexpr
+    , parseSexpr
     -- ** Parsing Atoms
     , parseIdentifier
     , naturalLiteral
@@ -76,13 +76,13 @@ import Control.Monad.Reader
 import Control.Monad.State
 import Text.Parsec hiding (space, newline)
 
-import Data.Spine
-import Data.SExpr
+import Data.Hexpr
+import Data.Sexpr
 
 ------ Types and Entry ------
-{-| Synonym for 'SpineLanguageT' over 'Identity'. -}
-type SpineParser u h a r = SpineParserT u h a Identity r
-{-| Type for parsers specialized to deal with spines.
+{-| Synonym for 'HexprLanguageT' over 'Identity'. -}
+type HexprParser u h a r = HexprParserT u h a Identity r
+{-| Type for parsers specialized to deal with hexpr.
     In this library, 'u' is user state, 'a' is atom type, 'h' is a hierarchy type
     to store atoms, and 'r' is result type.
 
@@ -91,7 +91,7 @@ type SpineParser u h a r = SpineParserT u h a Identity r
     We leave this as a type synonym instead of a @newtype@ so that all the Parsec
     parsers still work.
 -}
-type SpineParserT u h a m r = ParsecT String u (StateT InnerState (ReaderT (SpineLanguageT u h a m) m)) r
+type HexprParserT u h a m r = ParsecT String u (StateT InnerState (ReaderT (HexprLanguageT u h a m) m)) r
 
 {-| Used to track indentation and quasiquotation state. Left opaque to minimize cross section. -}
 data InnerState = InnerState { _indent :: Maybe [Integer], _quoteLevel :: Maybe Integer }
@@ -101,76 +101,76 @@ startInnerState = InnerState { _indent = Just [0]
                              , _quoteLevel = Just 0
                              }
 
-{-| Synonym for 'GenSpineLanguage' without state -}
-type SpineLanguage h a = GenSpineLanguage () h a
+{-| Synonym for 'GenHexprLanguage' without state -}
+type HexprLanguage h a = GenHexprLanguage () h a
 {-| Synonym for 'GenSpineLanguageT' for parsers over 'Identity'. -}
-type GenSpineLanguage u h a = SpineLanguageT u h a Identity
-{-| Aggregate of parts commonly needed by a 'SpineParserT'.
+type GenHexprLanguage u h a = HexprLanguageT u h a Identity
+{-| Aggregate of parts commonly needed by a 'HexprParserT'.
 
 -}
-data SpineLanguageT u h a m =
-    SpineLanguage { _atom         :: [SpineParserT u h a m a]
+data HexprLanguageT u h a m =
+    HexprLanguage { _atom         :: [HexprParserT u h a m a]
                     -- ^List of parsers that recognize atoms. Each attempted in order.
-                  , _specialNode  :: [SpineParserT u h a m (h a)]
+                  , _specialNode  :: [HexprParserT u h a m (h a)]
                     -- ^List of parsers that recognize nodes that are neither leaves nor branches.
-                  , _separate     :: SpineParserT u h a m ()
+                  , _separate     :: HexprParserT u h a m ()
                     -- ^Separate two nodes in a branch.
-                  , _indentize    :: [(SpineParserT u h a m (), SpineParserT u h a m ())]
+                  , _indentize    :: [(HexprParserT u h a m (), HexprParserT u h a m ())]
                     -- ^Before and after parsers for recognizing indentation structures.
-                  , _parenthesize :: [(SpineParserT u h a m (), SpineParserT u h a m ())]
+                  , _parenthesize :: [(HexprParserT u h a m (), HexprParserT u h a m ())]
                     -- ^Before and after parsers for recognizing parenthesized (or otherwise bracketed) structures.
-                  , _space        :: SpineParserT u h a m ()
+                  , _space        :: HexprParserT u h a m ()
                     -- ^Whitespace that doesn't count as moving to a new line.
-                  , _newline      :: SpineParserT u h a m ()
+                  , _newline      :: HexprParserT u h a m ()
                     -- ^Whitespace that counts as moving to a new line.
-                  , _lineComment  :: SpineParserT u h a m ()
+                  , _lineComment  :: HexprParserT u h a m ()
                     -- ^Introduce a line comment.
-                  , _blockComment :: (SpineParserT u h a m (), SpineParserT u h a m ())
+                  , _blockComment :: (HexprParserT u h a m (), HexprParserT u h a m ())
                     -- ^Parsers to enclose recursive block comments.
                   , _startState   :: u
                     -- ^Starting user state.
                   }
 
 
-{-| Run a spine parser in the 'Identity' monad without the fuss. -}
-runSpineParser :: GenSpineLanguage u h a-> SpineParser u h a r -> SourceName -> String -> Either ParseError r
-runSpineParser language parser source input = runIdentity $ runSpineParserT language parser source input
+{-| Run a hexpr parser in the 'Identity' monad without the fuss. -}
+runHexprParser :: GenHexprLanguage u h a-> HexprParser u h a r -> SourceName -> String -> Either ParseError r
+runHexprParser language parser source input = runIdentity $ runHexprParserT language parser source input
 
 {-| Given a language configuration, perform a parse of input. -}
-runSpineParserT :: (Monad m) => SpineLanguageT u h a m -> SpineParserT u h a m r -> SourceName -> String -> m (Either ParseError r)
-runSpineParserT language parser source input = runReaderT (evalStateT parse startInnerState) language
+runHexprParserT :: (Monad m) => HexprLanguageT u h a m -> HexprParserT u h a m r -> SourceName -> String -> m (Either ParseError r)
+runHexprParserT language parser source input = runReaderT (evalStateT parse startInnerState) language
     where
     parse = runPT parser (_startState language) source input
 
 
 ------ Batteries ------
-{-| Parse a spine, using atom, separate and parenthesize/indentize.
+{-| Parse a hexpr, using atom, separate and parenthesize/indentize.
 
-    Spines are parsed as either an 'atom', or a 'parenthesize'd or 'indentize'd node. A node,
-    in turn, is one or more spines separated, and optionally terminated, by 'separate'.
+    Hexprs are parsed as either an 'atom', or a 'parenthesize'd or 'indentize'd node. A node,
+    in turn, is one or more hexpr separated, and optionally terminated, by 'separate'.
 
-    In fact, this can parse any hierarchy, but the motivation is to parse spines and quasispines.
+    In fact, this can parse any hierarchy, but the motivation is to parse hexpr and quasihexprs.
 -}
-parseSpine :: (Hierarchy h, Monad m) => SpineParserT u h a m (h a)
-parseSpine = leaf <|> specialNode <|> indentBranch <|> parenBranch
+parseHexpr :: (Hierarchy h, Monad m) => HexprParserT u h a m (h a)
+parseHexpr = leaf <|> specialNode <|> indentBranch <|> parenBranch
     where
     leaf = individual <$> atom
-    indentBranch = indentize parseBareSpine >>= \(x:xs) -> return (x `adjoins` xs)
-    parenBranch = parenthesize parseBareSpine
+    indentBranch = indentize parseBareHexpr >>= \(x:xs) -> return (x `adjoins` xs)
+    parenBranch = parenthesize parseBareHexpr
 
 {-| Parse a branch, with nodes separated by 'separate', but without enclosing parenthesization or
     indentization needed.
 -}
-parseBareSpine :: (Hierarchy h, Monad m) => SpineParserT u h a m (h a)
-parseBareSpine = do
-    (car:cdr) <- parseSpine `sepEndBy1` separate
+parseBareHexpr :: (Hierarchy h, Monad m) => HexprParserT u h a m (h a)
+parseBareHexpr = do
+    (car:cdr) <- parseHexpr `sepEndBy1` separate
     return $ car `adjoins` cdr    
 
-{-| Parse an 'SExpr' with the same strategy as 'parseSpine'. -}
-parseSExpr :: (Monad m) => SpineParserT u h a m (SExpr a)
-parseSExpr = choice [ Atom  <$> atom
-                    , SExpr <$> parenthesize (parseSExpr `sepEndBy1` separate)
-                    , SExpr <$> indentize parseSExpr
+{-| Parse an 'Sexpr' with the same strategy as 'parseHexpr'. -}
+parseSexpr :: (Monad m) => HexprParserT u h a m (Sexpr a)
+parseSexpr = choice [ Atom  <$> atom
+                    , Sexpr <$> parenthesize (parseSexpr `sepEndBy1` separate)
+                    , Sexpr <$> indentize parseSexpr
                     ]
 
 {-| Consume \"whitespace\" characters before continuing with the passed parser.
@@ -179,7 +179,7 @@ parseSExpr = choice [ Atom  <$> atom
     and block comments (nesting between '_blockComment'). When indentation is disabled, 'newline's
     are also consumed.
 -}
-tokenize :: (Monad m) => SpineParserT u h a m r -> SpineParserT u h a m r
+tokenize :: (Monad m) => HexprParserT u h a m r -> HexprParserT u h a m r
 tokenize = (inlineSkip >>)
 
 {-| Parse a whole file, skipping to the first meaningful line and ensuring the
@@ -189,10 +189,10 @@ tokenize = (inlineSkip >>)
     That is, use it only in something like
     
     @
-    runSomething sourcename input = 'runSpineParserT' someLang ('parseFile' someParser) sourcename input
+    runSomething sourcename input = 'runHexprParserT' someLang ('parseFile' someParser) sourcename input
     @
 -}
-parseFile :: (Monad m) => SpineParserT u h a m r -> SpineParserT u h a m r
+parseFile :: (Monad m) => HexprParserT u h a m r -> HexprParserT u h a m r
 parseFile p = between (optional skipToLine) (optional skipToLine >> eof) p
 
 {-| Parse a file after preprocessing the stream so that literate files are accepted.
@@ -204,7 +204,7 @@ parseFile p = between (optional skipToLine) (optional skipToLine >> eof) p
     it except as a top-level wrapper. As 'parseFile', it also doesn't make sense
     outside that context.
 -}
-parseLiterateFile :: (Monad m) => String -> SpineParserT u h a m r -> SpineParserT u h a m r
+parseLiterateFile :: (Monad m) => String -> HexprParserT u h a m r -> HexprParserT u h a m r
 parseLiterateFile leader p = do
         setInput =<< preprocess <$> getInput
         put InnerState { _indent = Just [fromIntegral leadingSpaces], _quoteLevel = Just 0 }
@@ -219,7 +219,7 @@ parseLiterateFile leader p = do
 {-| Given two 'Char' parsers, parse one character of the first, and many characters
     of the second.
 -}
-parseIdentifier :: (Monad m) => SpineParserT u h a m Char -> SpineParserT u h a m Char -> SpineParserT u h a m String
+parseIdentifier :: (Monad m) => HexprParserT u h a m Char -> HexprParserT u h a m Char -> HexprParserT u h a m String
 parseIdentifier p1 pRest = do
     x <- p1
     xs <- many pRest
@@ -230,7 +230,7 @@ parseIdentifier p1 pRest = do
     The unary operators negate and positive are not parsed, since they may depend
     on the language in question.
 -}
-naturalLiteral :: (Monad m) => SpineParserT u h a m Integer
+naturalLiteral :: (Monad m) => HexprParserT u h a m Integer
 naturalLiteral = choice [ baseInt 16 "xX" hexDigit
                         , baseInt 8  "xX" octDigit
                         , baseInt 2  "bB" (oneOf "01")
@@ -247,7 +247,7 @@ naturalLiteral = choice [ baseInt 16 "xX" hexDigit
     As with 'naturalLiteral', the unary operators negate and positive are not parsed.
     Further, @+inf@, @-inf@ and @NaN@ are not parsed.
 -}
-floatLiteral :: (Monad m) => SpineParserT u h a m Double --FIXME should be multiple-precision
+floatLiteral :: (Monad m) => HexprParserT u h a m Double --FIXME should be multiple-precision
 floatLiteral = parserZero --STUB
 
 {-| Parse a single (meaningful) character or else an empty character. This should be applicable
@@ -283,7 +283,7 @@ floatLiteral = parserZero --STUB
 \\&: empty string
 @
 -}
-stringLiteralChar :: (Monad m) => SpineParserT u h a m (Maybe Char)
+stringLiteralChar :: (Monad m) => HexprParserT u h a m (Maybe Char)
 stringLiteralChar = normalChar <|> escape
     where
     normalChar = Just <$> satisfy (\c -> c >= ' ' && c `notElem` "\DEL\"\\")
@@ -335,7 +335,7 @@ FOO
     The terminator line is consumed, but is not part of the content. All characters found in
     the body are passed through unadulterated.
 -}
-parseHereDoc :: (Monad m) => String -> SpineParserT u h a m String
+parseHereDoc :: (Monad m) => String -> HexprParserT u h a m String
 parseHereDoc prefix = do
     try (string prefix)
     terminate <- anyChar `manyTill` (char '\n')
@@ -343,8 +343,8 @@ parseHereDoc prefix = do
     anyChar `manyTill` try terminalLine
 
 ------ Default Languages ------
-emptyLang :: (Monad m) => u -> SpineLanguageT u h a m
-emptyLang start = SpineLanguage { _atom = []
+emptyLang :: (Monad m) => u -> HexprLanguageT u h a m
+emptyLang start = HexprLanguage { _atom = []
                                 , _specialNode = []
                                 , _separate = do
                                                 lookAhead $ oneOf " ()#\n\t"
@@ -360,19 +360,19 @@ emptyLang start = SpineLanguage { _atom = []
 
 ------ Monad Access ------
 {-| Parse an atom: any of the parsers supplied by '_atom'. -}
-atom :: (Monad m) => SpineParserT u h a m a
+atom :: (Monad m) => HexprParserT u h a m a
 atom = asks _atom >>= choice
 
 {-| Parse a node of a hierarchy that is neither a leaf nor branch. -}
-specialNode :: (Hierarchy h, Monad m) => SpineParserT u h a m (h a)
+specialNode :: (Hierarchy h, Monad m) => HexprParserT u h a m (h a)
 specialNode = asks _specialNode >>= choice
 
 {-| Parse an atom-separator according to '_separate'. -}
-separate :: (Monad m) => SpineParserT u h a m ()
+separate :: (Monad m) => HexprParserT u h a m ()
 separate = asks _separate >>= id
 
 {-| Parse many, each on its own line, and wrapped in one of the '_indentize' parsers. -}
-indentize :: (Monad m) => SpineParserT u h a m r -> SpineParserT u h a m [r]
+indentize :: (Monad m) => HexprParserT u h a m r -> HexprParserT u h a m [r]
 indentize p = do
     dents <- asks _indentize
     choice [between before after (p `sepBy1` nextline) | (before, after) <- dents]
@@ -382,23 +382,23 @@ indentize p = do
     Specifically, if @'_parenthesize' === [(a b)]@, then @parenthesize p === between a b p@.
     When multiple elements are given in '_parenthesize', the first applicable is selected.
 -}
-parenthesize :: (Monad m) => SpineParserT u h a m r -> SpineParserT u h a m r
+parenthesize :: (Monad m) => HexprParserT u h a m r -> HexprParserT u h a m r
 parenthesize p = do
     parens <- asks _parenthesize
     choice [between before after p | (before, after) <- parens]
 
 {-| Parse a non-newline space according to '_space'. -}
-space :: (Monad m) => SpineParserT u h a m ()
+space :: (Monad m) => HexprParserT u h a m ()
 space = asks _space >>= id
 
 {-| Parse a newline according to '_newline'. -}
-newline :: (Monad m) => SpineParserT u h a m ()
+newline :: (Monad m) => HexprParserT u h a m ()
 newline = asks _newline >>= id
 
 {-| Parse a newline such that the next meaningful line has the same amount of leading whitespace as the previous line.
     Fails if indentation is disabled.
 -}
-nextline :: (Monad m) => SpineParserT u h a m ()
+nextline :: (Monad m) => HexprParserT u h a m ()
 nextline = (<?> "new line") . try $ do
     InnerState { _indent = Just (expectedSpaces:_), _quoteLevel = _ } <- get
     skipToLine
@@ -410,7 +410,7 @@ nextline = (<?> "new line") . try $ do
 {-| Parse an indent: next meaningful line has more leading whitespace than the previous line.
     Fails if indentation is disabled.
 -}
-indent :: (Monad m) => SpineParserT u h a m ()
+indent :: (Monad m) => HexprParserT u h a m ()
 indent = (<?> "indent") . try $ do
     InnerState { _indent = Just stack@(expectedSpaces:_), _quoteLevel = ql } <- get
     skipToLine
@@ -431,7 +431,7 @@ zero indent
   bad indent
 @
 -}
-dedent :: (Monad m) => SpineParserT u h a m ()
+dedent :: (Monad m) => HexprParserT u h a m ()
 dedent = (<?> "dedent") . try $ do
     InnerState { _indent = Just (_:stack@(expectedSpaces:_)), _quoteLevel = ql} <- get
     skipToLine
@@ -443,13 +443,13 @@ dedent = (<?> "dedent") . try $ do
 {-| Turns indentation off, so that 'newline' is consumed by 'tokenize' and 'indent',
     'dedent' and 'nextline' all fail.
 -}
-disableIndentation :: (Monad m) => SpineParserT u h a m r -> SpineParserT u h a m r
+disableIndentation :: (Monad m) => HexprParserT u h a m r -> HexprParserT u h a m r
 disableIndentation p = do
     st <- get
     between (put st { _indent = Nothing }) (put st) p
 
 {-| Increase quasiquotation level for the passed parser. -}
-withQuasiquote :: (Monad m) => SpineParserT u h a m r -> SpineParserT u h a m r
+withQuasiquote :: (Monad m) => HexprParserT u h a m r -> HexprParserT u h a m r
 withQuasiquote p = do
     st@InnerState { _indent = il, _quoteLevel = Just ql } <- get
     put InnerState { _indent = il, _quoteLevel = Just (ql + 1) }
@@ -458,14 +458,14 @@ withQuasiquote p = do
     return res
 
 {-| Current number of leading spaces. Fails if indentation is disabled. -}
-getIndentLevel :: (Monad m) => SpineParserT u h a m Integer
+getIndentLevel :: (Monad m) => HexprParserT u h a m Integer
 getIndentLevel = (\InnerState { _indent = Just (x:_), _quoteLevel = _} -> x) <$> get
 
 
 {-| Decrease quasiquotation level for the passed parser. Fails if quasiquotation level
     is already at zero.
 -}
-withUnquote :: (Monad m) => SpineParserT u h a m r -> SpineParserT u h a m r
+withUnquote :: (Monad m) => HexprParserT u h a m r -> HexprParserT u h a m r
 withUnquote p = do
     st@InnerState { _indent = il, _quoteLevel = Just ql } <- get
     when (ql <= 0) $ fail "Unexpected unquote outside quasiquote."
@@ -475,7 +475,7 @@ withUnquote p = do
     return res
 
 {-| Turns quasiquotation off such that 'withQuasiquote' and 'withUnquote' both fail. -}
-disableQuasiquotation :: (Monad m) => SpineParserT u h a m r -> SpineParserT u h a m r
+disableQuasiquotation :: (Monad m) => HexprParserT u h a m r -> HexprParserT u h a m r
 disableQuasiquotation p = do
     st <- get
     between (put st { _quoteLevel = Nothing }) (put st) p
@@ -483,19 +483,19 @@ disableQuasiquotation p = do
 {-| Current number of enclosing quasiquotes minus enclosing unquotes.
     Fails if quasiquotation is disabled.
 -}
-getQuasiquoteLevel :: (Monad m) => SpineParserT u h a m Integer
+getQuasiquoteLevel :: (Monad m) => HexprParserT u h a m Integer
 getQuasiquoteLevel = (\InnerState { _indent = _, _quoteLevel = Just x} -> x) <$> get
 
 
 ------ Helpers ------
-inlineSkip :: (Monad m) => SpineParserT u h a m ()
+inlineSkip :: (Monad m) => HexprParserT u h a m ()
 inlineSkip = do
     InnerState { _indent = depth, _quoteLevel = _ } <- get
     case depth of
         Just _  -> skipMany (space <|> lineComment <|> blockComment)
         Nothing -> skipMany (space <|> newline <|> lineComment <|> blockComment)
 
-skipToLine :: (Monad m) => SpineParserT u h a m ()
+skipToLine :: (Monad m) => HexprParserT u h a m ()
 skipToLine = oneNewline >> skipBlanklines
     where
     oneNewline = tokenize (newline <|> eof)
@@ -505,12 +505,12 @@ skipToLine = oneNewline >> skipBlanklines
                <|> return False
     skipBlanklines = isBlankLine >>= \blank -> if blank then skipToLine else return ()
 
-lineComment :: (Monad m) => SpineParserT u h a m ()
+lineComment :: (Monad m) => HexprParserT u h a m ()
 lineComment = void $ do
     asks _lineComment >>= id
     anyChar `manyTill` lookAhead (try newline <|> eof)
 
-blockComment :: (Monad m) => SpineParserT u h a m ()
+blockComment :: (Monad m) => HexprParserT u h a m ()
 blockComment = do
         (begin, end) <- asks _blockComment
         let oneBlock = void $ begin >> inBlock `manyTill` end
