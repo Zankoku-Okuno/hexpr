@@ -11,13 +11,17 @@ module Language.SystemT (run) where
 import Data.List
 import Data.Maybe
 import Data.Text (Text, pack, unpack)
+import Data.IORef
 import Text.Parsec ( ParseError, SourcePos, getPosition
                    , try, choice, char, string, letter)
 import Control.Applicative
 import Control.Monad
+import Control.Monad.Trans.Either
 import Data.Spine
 import Data.Spine.Parser
 import Data.Spine.Desugar
+import Data.Gensym
+import Data.Environment
 
 
 {-
@@ -210,7 +214,7 @@ desugarExpr = go . implicitParens
             [e] -> IncPos pos <$> desugarExpr e
 
 desugarType :: Spine (Pos Atom) -> Either DesugarError TypePos
-desugarType xs = go $ rightInfix (isKw KwArr) xs
+desugarType = go . rightInfix (isKw KwArr)
     where
     go ::Spine (Pos Atom) -> Either DesugarError TypePos
     go x@(Leaf (pos, _))  | isKw KwNat x = Right (NatPos pos)
@@ -222,14 +226,28 @@ desugarType xs = go $ rightInfix (isKw KwArr) xs
 
 
  ------ Typecheck ------
+type Uniq = Integer
+type TySlot = IORef (Maybe Ty)
+data Ty = TyNat SourcePos | TyArr SourcePos Ty Ty | TySkolem Uniq TySlot
 
+data TypeError = UnificationFailure TypePos TypePos
+
+type Tc a = EitherT TypeError (SymbolGenT Integer (EnvironmentIO Text Ty)) a
+
+--unify :: TypePos -> TypePos -> Bool
+--unify (NatPos _) (NatPos _) = True
+--unify (ArrPos _ t1 t2) (ArrPos _ t1' t2') = unify t1 t1' && unify t2 t2'
+--unify _ _ = False
+
+--typeOf :: ExprPos -> Type
+--typeOf (VarPos)
+--typeOf (NumPos pos _) = NatPos pos
 
  ------ To AST ------
-data Type = Nat | Arr Type Type
 data Expr = Var Text
           | Num Integer
           | Rec { _init :: Expr, _recur :: Text, _zero :: Expr, _prev :: Text, _body :: Expr }
-          | Lam Text Type Expr
+          | Lam Text Expr
           | App Expr Expr
 
 
