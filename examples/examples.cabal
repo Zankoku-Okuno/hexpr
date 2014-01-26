@@ -20,6 +20,7 @@ executable runspine
   -- other-modules:       
   build-depends:        base ==4.6.*,
                         data-ref,
+                        symbol == 0.2.*,
                         text ==0.11.*,
                         directory ==1.2.*,
                         parsec ==3.0.*,

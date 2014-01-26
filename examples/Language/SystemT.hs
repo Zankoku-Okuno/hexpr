@@ -3,7 +3,7 @@ module Language.SystemT (run) where
 import Data.List (intercalate)
 import Data.Maybe
 import Data.Either.Combinators
-import Data.Text (Text, pack, unpack)
+import Data.Symbol
 import Data.IORef
 import qualified Data.Ref as Ref
 import Data.Ref (new, newLifted)
@@ -49,7 +49,7 @@ data Keyword = KwNat | KwArr | KwInc | KwLam | KwRec | KwAnn
     deriving (Eq)
 data Atom = K SourcePos Keyword
           | N SourcePos Integer
-          | V SourcePos Text
+          | V SourcePos Symbol
     deriving (Eq)
 
 instance Show Keyword where
@@ -61,7 +61,7 @@ instance Show Keyword where
     show KwAnn = ":"
 instance Show Atom where
     show (N _ n) = show n
-    show (V _ v) = unpack v
+    show (V _ v) = unintern v
     show (K _ kw) = show kw
 instance Show a => Show (Hexpr a) where
     show (Leaf x) = show x
@@ -76,8 +76,8 @@ lang = (emptyLang ()) { _atom = [ choice [ kw ":"      KwAnn
                                          , kw "\955"   KwLam
                                          , kw "lambda" KwLam
                                          ]
-                                , liftPos (flip N)         naturalLiteral
-                                , liftPos (flip V . pack) (parseIdentifier letter letter)
+                                , liftPos (flip N)           naturalLiteral
+                                , liftPos (flip V . intern) (parseIdentifier letter letter)
                                 ]
                       , _lineComment = void . try $ string "--"
                       }
@@ -97,13 +97,13 @@ parser = runHexprParser lang (parseFile parseBareHexpr)
 
  ------ Desugar ------
 data Type' = Nat' SourcePos | Arr' SourcePos Type' Type'
-data Expr' = Var' SourcePos Text
-             | Num' SourcePos Integer
-             | Inc' SourcePos Expr'
-             | Lam' SourcePos (SourcePos, Text) Type' Expr'
-             | Rec' SourcePos (SourcePos, Text) Expr' Expr' (SourcePos, Text) Expr'
-             | App' Expr' Expr'
-             | Ann' SourcePos Expr' Type'
+data Expr' = Var' SourcePos Symbol
+           | Num' SourcePos Integer
+           | Inc' SourcePos Expr'
+           | Lam' SourcePos (SourcePos, Symbol) Type' Expr'
+           | Rec' SourcePos (SourcePos, Symbol) Expr' Expr' (SourcePos, Symbol) Expr'
+           | App' Expr' Expr'
+           | Ann' SourcePos Expr' Type'
 
 getPos :: Hexpr Atom -> SourcePos
 getPos (Leaf (N pos _)) = pos
@@ -116,11 +116,11 @@ isKw kw (Leaf (K _ kw')) = kw == kw'
 isKw kw _ = False
 
 instance Show Expr' where
-    show (Var' _ x) = unpack x
+    show (Var' _ x) = unintern x
     show (Num' _ n) = show n
     show (Inc' _ x) = "++ " ++ show x
-    show (Lam' _ (_, x) t e) = "(\955 (" ++ unpack x ++ " : " ++ show t ++ ") " ++ show e ++ ")" 
-    show (Rec' _ (_, f) n z (_, x) e) = "(rec " ++ unpack f ++ " {z => " ++ show z ++ " | ++(" ++ unpack x ++ ") => " ++ show e ++ "} " ++ show n ++ ")"
+    show (Lam' _ (_, x) t e) = "(\955 (" ++ unintern x ++ " : " ++ show t ++ ") " ++ show e ++ ")" 
+    show (Rec' _ (_, f) n z (_, x) e) = "(rec " ++ unintern f ++ " {z => " ++ show z ++ " | ++(" ++ unintern x ++ ") => " ++ show e ++ "} " ++ show n ++ ")"
     show (App' f x) = "(" ++ show f ++ " " ++ show x ++ ")"
     show (Ann' _ e t) = "(" ++ show e ++ " : " ++ show t ++ ")"
 instance Show Type' where
@@ -217,13 +217,13 @@ type Uniq = Integer
 type MetaType = (Uniq, IORef (Maybe Type)) --FIXME make it an STRef
 
 data Type = Nat | Arr Type Type | MetaType MetaType
-data Term = Var Text
-          | Num Integer
+data Term = Var Symbol
+          | Num !Integer
           | Inc Term
-          | Rec Text Term Term Text Term
-          | Lam Text Term
+          | Rec Symbol Term Term Symbol Term
+          | Lam Symbol Term
           | App Term Term
-          | Closure (MEnv IO Text Term) Text Term
+          | Closure (MEnv IO Symbol Term) Symbol Term
 
 toType :: Type' -> Type
 toType (Nat' _) = Nat
@@ -234,21 +234,22 @@ instance Show Type where
     show (Arr t1 t2) = show t1 ++  " -> " ++ show t2
     show (MetaType (x, ref)) = "t" ++ show x
 instance Show Term where
-    show (Var x) = unpack x
+    show (Var x) = unintern x
     show (Num n) = show n
     show (Inc e) = "++ " ++ show e
-    show (Lam x e) = "(\955 " ++ unpack x ++ " " ++ show e ++ ")" 
-    show (Rec f n z x e) = "(rec " ++ unpack f ++ " {z => " ++ show z ++ " | ++(" ++ unpack x ++ ") => " ++ show e ++ "} " ++ show n ++ ")"
+    show (Lam x e) = "(\955 " ++ unintern x ++ " " ++ show e ++ ")" 
+    show (Rec f n z x e) = "(rec " ++ unintern f ++ " {z => " ++ show z ++ " | ++(" ++ unintern x ++ ") => " ++ show e ++ "} " ++ show n ++ ")"
     show (App f x) = "(" ++ show f ++ " " ++ show x ++ ")"
+    show (Closure env x e) = show (Lam x e)
 
 
-type Tc a = EnvironmentT Text Type (SymbolGenT Integer (EitherT TypeError IO)) a
+type Tc a = EnvironmentT Symbol Type (SymbolGenT Integer (EitherT TypeError IO)) a
 
 data TypeError = UnificationFailure SourcePos Type Type
-               | UnboundVariable SourcePos Text
+               | UnboundVariable SourcePos Symbol
 instance Show TypeError where
     show (UnificationFailure pos t1 t2) = "Type error at " ++ show pos ++ "\nExpected: " ++ show t1 ++ "\nFound: " ++ show t2
-    show (UnboundVariable pos x) = "Unbound variable `" ++ unpack x ++ "' at " ++ show pos ++ "."
+    show (UnboundVariable pos x) = "Unbound variable `" ++ unintern x ++ "' at " ++ show pos ++ "."
 
 newMetaTy :: Tc Type
 newMetaTy = do
@@ -340,7 +341,7 @@ unifyVar pos tv1@(_, ref1) t2 = do
 
 
  ------ Evaluate ------
-type Eval a = EnvironmentIO Text Term a
+type Eval a = EnvironmentIO Symbol Term a
 
 eval :: Term -> IO Term
 eval = evalEnvironmentT [] . reduce
