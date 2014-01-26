@@ -18,9 +18,9 @@ main = do
             when missing $ die $ "File `" ++ filename ++ "' does not exist."
             result <- case langname of
             	"t" -> SystemT.run filename
-            	_ -> return . Left $ "Unrecognized language `" ++ langname ++ "'. Try one of: " ++ intercalate ", " ["t", "pcf", "f"]
+            	_ -> return . Left $ "Unrecognized language `" ++ langname ++ "'. Try one of: " ++ intercalate ", " ["t"]
             case result of
-                Right () -> putStrLn "Goodbyte, cruel world!" >> exitSuccess
+                Right () -> exitSuccess
                 Left errmsg -> die errmsg
         _ -> do
             progname <- getProgName

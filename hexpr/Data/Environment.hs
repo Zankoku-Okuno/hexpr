@@ -13,6 +13,7 @@ module Data.Environment (
     , extractLocal
     , extractParent
     , copyEnv
+    , copyLocalEnv
 
     , find
     , bind
@@ -124,6 +125,19 @@ copyEnv (MEnv cell parent) = do
         Nothing -> return Nothing
         Just parent -> Just <$> copyEnv parent
     newEnv xs' parent'
+
+{-| Make a shallow copy of the passed environment
+
+    That is, only the @MEnv@'s own bindings cell is copied; the parent (if any) is not copied.
+    A new environment is constructed of the two, which shares only enough state with the original
+    so that writes to the new do not affect the original, and only writes to the parents of the
+    original are available (modulo shadowing) in the new. Bound values are not copied, however,
+    so state may also be shared insofar as the bound values have state.
+-}
+copyLocalEnv :: (Ref.C m) => MEnv m k v -> EnvironmentT k v m (MEnv m k v)
+copyLocalEnv (MEnv cell parent) = do
+    xs' <- liftHeap $ Ref.read cell
+    newEnv xs' parent
 
 {-| Create an immutable environment from a snapshot of the passed mutable environment. -}
 closeEnv :: (Ref.C m) => MEnv m k v -> EnvironmentT k v m (Env k v)

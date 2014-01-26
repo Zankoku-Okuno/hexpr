@@ -33,11 +33,15 @@ run filename = runEitherT $ do
     checked <- case check of
         Left err -> left (show err ++ "\n" ++ show cooked)
         Right val -> right val
+    evaled <- liftIO $ eval checked
     liftIO $ do 
         putStr ">>> " >> print raw
         putStr "=>> " >> print cooked
         putStr "==> " >> print checked
-    right ()
+        putStr "=== " >> print evaled
+        --putStrLn "" >> putStrLn (compile checked)
+
+instance (Ref.C m) => Ref.C (EitherT e m) where new = newLifted
 
 
  ------ Parser ------
@@ -92,32 +96,14 @@ parser = runHexprParser lang (parseFile parseBareHexpr)
 
 
  ------ Desugar ------
-data TypePos = NatPos SourcePos | ArrPos SourcePos TypePos TypePos
-data ExprPos = VarPos SourcePos Text
-             | NumPos SourcePos Integer
-             | IncPos SourcePos ExprPos
-             | LamPos SourcePos (SourcePos, Text) TypePos ExprPos
-             | RecPos SourcePos (SourcePos, Text) ExprPos ExprPos (SourcePos, Text) ExprPos
-             | AppPos ExprPos ExprPos
-             | AnnPos SourcePos ExprPos TypePos
-
-instance Show ExprPos where
-    show (VarPos _ x) = unpack x
-    show (NumPos _ n) = show n
-    show (IncPos _ x) = "++ " ++ show x
-    show (LamPos _ (_, x) t e) = "(\955 (" ++ unpack x ++ " : " ++ show t ++ ") " ++ show e ++ ")" 
-    show (RecPos _ (_, f) n z (_, x) e) = "rec " ++ unpack f ++ " " ++ show n ++ " {z => " ++ show z ++ " | ++(" ++ unpack x ++ ") => " ++ show e ++ "}"
-    show (AppPos f x) = "(" ++ show f ++ " " ++ show x ++ ")"
-    show (AnnPos _ e t) = "(" ++ show e ++ " : " ++ show t ++ ")"
-instance Show TypePos where
-    show (NatPos _) = "Nat"
-    show (ArrPos _ a r) = "(" ++ show a ++ " -> " ++ show r ++ ")"
-
-type Ds a = Either DesugarError a
-data DesugarError = Err SourcePos String
-
-instance Show DesugarError where
-    show (Err pos msg) = "Syntax error in " ++ show pos ++ ".\n" ++ msg
+data Type' = Nat' SourcePos | Arr' SourcePos Type' Type'
+data Expr' = Var' SourcePos Text
+             | Num' SourcePos Integer
+             | Inc' SourcePos Expr'
+             | Lam' SourcePos (SourcePos, Text) Type' Expr'
+             | Rec' SourcePos (SourcePos, Text) Expr' Expr' (SourcePos, Text) Expr'
+             | App' Expr' Expr'
+             | Ann' SourcePos Expr' Type'
 
 getPos :: Hexpr Atom -> SourcePos
 getPos (Leaf (N pos _)) = pos
@@ -129,14 +115,44 @@ isKw :: Keyword -> Hexpr Atom -> Bool
 isKw kw (Leaf (K _ kw')) = kw == kw'
 isKw kw _ = False
 
-desugarExpr :: Hexpr Atom -> Ds ExprPos
+instance Show Expr' where
+    show (Var' _ x) = unpack x
+    show (Num' _ n) = show n
+    show (Inc' _ x) = "++ " ++ show x
+    show (Lam' _ (_, x) t e) = "(\955 (" ++ unpack x ++ " : " ++ show t ++ ") " ++ show e ++ ")" 
+    show (Rec' _ (_, f) n z (_, x) e) = "(rec " ++ unpack f ++ " {z => " ++ show z ++ " | ++(" ++ unpack x ++ ") => " ++ show e ++ "} " ++ show n ++ ")"
+    show (App' f x) = "(" ++ show f ++ " " ++ show x ++ ")"
+    show (Ann' _ e t) = "(" ++ show e ++ " : " ++ show t ++ ")"
+instance Show Type' where
+    show (Nat' _) = "Nat"
+    show (Arr' _ a r) = "(" ++ show a ++ " -> " ++ show r ++ ")"
+
+
+type Ds a = Either DesugarError a
+data DesugarError = Err SourcePos String
+
+instance Show DesugarError where
+    show (Err pos msg) = "Syntax error in " ++ show pos ++ ".\n" ++ msg
+
+
+desugarType :: Hexpr Atom -> Ds Type'
+desugarType = go . rightInfix (isKw KwArr)
+    where
+    go (Leaf (K pos KwNat)) = Right (Nat' pos)
+    go (Branch (Leaf (K pos KwArr):xs)) = case xs of
+        [a] -> Left $ Err pos "Missing result type."
+        [a, r] -> Arr' pos <$> desugarType a <*> desugarType r
+        _ -> error "Something went horribly wrong: more than two arguments to _->_ infix"
+    go x = Left $ Err (getPos x) "Expecting type."
+
+desugarExpr :: Hexpr Atom -> Ds Expr'
 desugarExpr = go . implicitParens
     where
     implicitParens = addShortParens (isKw KwInc) . addParens isBinder . rightInfix (isKw KwAnn)
         where isBinder x = isKw KwLam x || isKw KwRec x
     go (Leaf atom) = case atom of
-        N pos n  -> Right $ NumPos pos n
-        V pos x  -> Right $ VarPos pos x
+        N pos n  -> Right $ Num' pos n
+        V pos x  -> Right $ Var' pos x
         K pos kw -> Left $ Err pos ("Unexpected `" ++ show kw ++ "'.")
     go (Branch xs) = case xs of
         [Leaf (K pos KwAnn), e, t] -> desugarAnn pos e t
@@ -146,20 +162,20 @@ desugarExpr = go . implicitParens
         Leaf (K pos KwRec):xs -> desugarRec pos xs
         xs                    -> desugarApp <$> mapM desugarExpr xs
         where
-        desugarAnn :: SourcePos -> Hexpr Atom -> Hexpr Atom -> Ds ExprPos
-        desugarAnn pos e t = AnnPos pos <$> desugarExpr e <*> desugarType t
-        desugarInc :: SourcePos -> [Hexpr Atom] -> Ds ExprPos
+        desugarAnn :: SourcePos -> Hexpr Atom -> Hexpr Atom -> Ds Expr'
+        desugarAnn pos e t = Ann' pos <$> desugarExpr e <*> desugarType t
+        desugarInc :: SourcePos -> [Hexpr Atom] -> Ds Expr'
         desugarInc pos xs = case xs of
             [] -> Left $ Err pos "Unexpected `++'."
-            [e] -> IncPos pos <$> desugarExpr e
-        desugarLam :: SourcePos -> [Hexpr Atom] -> Ds ExprPos
+            [e] -> Inc' pos <$> desugarExpr e
+        desugarLam :: SourcePos -> [Hexpr Atom] -> Ds Expr'
         desugarLam pos xs = case xs of
             [] -> Left $ Err pos "Unexpected `\955'."
             [x] -> Left $ Err pos "Missing function body."
             
             (x:e) -> do
                 (x, t) <- getVarBind x
-                LamPos pos x t <$> desugarExpr (node e)
+                Lam' pos x t <$> desugarExpr (node e)
             where
             getVarBind x@(Leaf _) = Left $ Err (getPos x) "Expected annotated variable."
             getVarBind (Branch xs) = tripBy (isKw KwAnn) missingAnn foundAnn xs
@@ -171,7 +187,7 @@ desugarExpr = go . implicitParens
                     t' <- desugarType (node t)
                     Right ((pos, x), t')
                 foundAnn (x:xs) ann _ = Left $ Err (getPos ann) "Expected variable."
-        desugarRec :: SourcePos -> [Hexpr Atom] -> Ds ExprPos
+        desugarRec :: SourcePos -> [Hexpr Atom] -> Ds Expr'
         desugarRec pos xs = case xs of
             [recvar, start] -> Left $ Err pos "Missing recurrence base case."
             [recvar, start, zero] -> Left $ Err pos "Missing recurrence relation."
@@ -180,7 +196,7 @@ desugarExpr = go . implicitParens
             {- Alright, now `rec` has all the syntactic elements it needs. -}
             (recvar: start: zero: elemvar: arr: body) -> do
                 getArr arr
-                RecPos pos <$> getVar recvar <*> desugarExpr start
+                Rec' pos <$> getVar recvar <*> desugarExpr start
                     <*> desugarExpr zero
                     <*> getVar elemvar
                     <*> desugarExpr (node body)
@@ -189,145 +205,167 @@ desugarExpr = go . implicitParens
             getVar x = Left $ Err (getPos x) "Expected variable."
             getArr (Leaf (K pos KwArr)) = Right ()
             getArr x = Left $ Err (getPos x) "Expected `->'."
-        desugarApp :: [ExprPos] -> ExprPos
-        desugarApp [] = error "something has gone horribly wrong inside the System T compiler: AppPos []"
-        desugarApp [_] = error "something has gone horribly wrong inside the System T compiler: AppPos [_]"
-        desugarApp [f, x] = AppPos f x
-        desugarApp xs = AppPos (desugarApp $ init xs) (last xs)
-
-desugarType :: Hexpr Atom -> Ds TypePos
-desugarType = go . rightInfix (isKw KwArr)
-    where
-    go (Leaf (K pos KwNat)) = Right (NatPos pos)
-    go (Branch (Leaf (K pos KwArr):xs)) = case xs of
-        [a] -> Left $ Err pos "Missing result type."
-        [a, r] -> ArrPos pos <$> desugarType a <*> desugarType r
-        _ -> error "Something went horribly wrong: more than two arguments to _->_ infix"
-    go x = Left $ Err (getPos x) "Expecting type."
+        desugarApp :: [Expr'] -> Expr'
+        desugarApp [] = error "something has gone horribly wrong inside the System T compiler: App' []"
+        desugarApp [_] = error "something has gone horribly wrong inside the System T compiler: App' [_]"
+        desugarApp [f, x] = App' f x
+        desugarApp xs = App' (desugarApp $ init xs) (last xs)
 
 
  ------ Typecheck ------
 type Uniq = Integer
-type TySlot = IORef (Maybe Ty) --FIXME make it an STRef
+type MetaType = (Uniq, IORef (Maybe Type)) --FIXME make it an STRef
 
-data Ty = TyNat | TyArr Ty Ty | MetaTy Uniq TySlot
-data Expr = Var Text
+data Type = Nat | Arr Type Type | MetaType MetaType
+data Term = Var Text
           | Num Integer
-          | Inc Expr
-          | Rec Text Expr Expr Text Expr
-          | Lam Text Expr
-          | App Expr Expr
+          | Inc Term
+          | Rec Text Term Term Text Term
+          | Lam Text Term
+          | App Term Term
+          | Closure (MEnv IO Text Term) Text Term
 
-type Tc a = EnvironmentT Text Ty (SymbolGenT Integer (EitherT TypeError IO)) a
---type Tc a = EitherT TypeError (SymbolGenT Integer (EnvironmentIO Text Ty)) a
+toType :: Type' -> Type
+toType (Nat' _) = Nat
+toType (Arr' _ t1 t2) = Arr (toType t1) (toType t2)
 
-data TypeError = UnificationFailure SourcePos Ty Ty
-               | UnboundVariable SourcePos Text
-
-instance Show Ty where
-    show TyNat = "Nat"
-    show (TyArr t1 t2) = show t1 ++  " -> " ++ show t2
-    show (MetaTy x ref) = "t" ++ show x
-instance Show Expr where
+instance Show Type where
+    show Nat = "Nat"
+    show (Arr t1 t2) = show t1 ++  " -> " ++ show t2
+    show (MetaType (x, ref)) = "t" ++ show x
+instance Show Term where
     show (Var x) = unpack x
     show (Num n) = show n
     show (Inc e) = "++ " ++ show e
     show (Lam x e) = "(\955 " ++ unpack x ++ " " ++ show e ++ ")" 
-    show (Rec f n z x e) = "rec " ++ unpack f ++ " " ++ show n ++ " {z => " ++ show z ++ " | ++(" ++ unpack x ++ ") => " ++ show e ++ "}"
+    show (Rec f n z x e) = "(rec " ++ unpack f ++ " {z => " ++ show z ++ " | ++(" ++ unpack x ++ ") => " ++ show e ++ "} " ++ show n ++ ")"
     show (App f x) = "(" ++ show f ++ " " ++ show x ++ ")"
+
+
+type Tc a = EnvironmentT Text Type (SymbolGenT Integer (EitherT TypeError IO)) a
+
+data TypeError = UnificationFailure SourcePos Type Type
+               | UnboundVariable SourcePos Text
 instance Show TypeError where
     show (UnificationFailure pos t1 t2) = "Type error at " ++ show pos ++ "\nExpected: " ++ show t1 ++ "\nFound: " ++ show t2
     show (UnboundVariable pos x) = "Unbound variable `" ++ unpack x ++ "' at " ++ show pos ++ "."
 
-typecheck :: ExprPos -> IO (Either TypeError Expr)
+newMetaTy :: Tc Type
+newMetaTy = do
+    uniq <- lift gensym
+    ref <- liftIO $ newIORef Nothing
+    return (MetaType (uniq, ref))
+
+failTc :: TypeError -> Tc ()
+failTc = lift . lift . left
+
+typecheck :: Expr' -> IO (Either TypeError Term)
 typecheck e = runEitherT . runSymbolGenT . evalEnvironmentT [] $ checkTau e =<< newMetaTy
 
-checkTau :: ExprPos -> Ty -> Tc Expr
-checkTau (NumPos pos n) t' = unify pos TyNat t' >> return (Num n)
-checkTau (VarPos pos x) t' = do
+
+checkTau :: Expr' -> Type -> Tc Term
+-- derive that `Γ ⊢ n:Nat`
+checkTau (Num' pos n) t = unify pos Nat t >> return (Num n)
+-- derive that `Γ,x:t ⊢ x:t`
+checkTau (Var' pos x) t = do
     found <- find x
     case found of
         Nothing -> failTc $ UnboundVariable pos x
-        Just t -> unify pos t t'
+        Just t' -> unify pos t' t
     return (Var x)
-checkTau (IncPos pos e) t' = do
-    e' <- checkTau e TyNat
-    unify pos TyNat t'
+-- derive that `Γ ⊢ ++e : Nat` given
+checkTau (Inc' pos e) t = do
+    -- that Γ ⊢ e : Nat
+    e' <- checkTau e Nat
+    unify pos Nat t
     return (Inc e')
-checkTau (AppPos f x) t = do
+-- derive that `Γ ⊢ e1 e2 : t` given
+checkTau (App' f x) t = do
     t2 <- newMetaTy
-    f' <- checkTau f (TyArr t2 t)
-    x' <- checkTau x t2
+    f' <- checkTau f (Arr t2 t) -- that `Γ ⊢ e1 : t2 -> t`
+    x' <- checkTau x t2 -- and that `Γ ⊢ e2 : t2`
     return (App f' x')
-checkTau (LamPos pos (xpos, x) t e) t' = do
-    (tArg, tRes) <- unifyFun pos t'
-    unify xpos tArg (toType t)
+-- derive that `Γ ⊢ λ (x : t1) e : t` given
+checkTau (Lam' pos (xpos, x) ann e) t = do
+    let t1 = toType ann
+    -- that `t ~ t1 -> t2`
+    t2 <- newMetaTy
+    unify pos (Arr t1 t2) t
+    -- and that `Γ, x:t1 ⊢ e:t2`
     e' <- localEnv $ do
-        bind x (toType t)
-        checkTau e tRes
+        bind x t1
+        checkTau e t2
     return (Lam x e')
-checkTau (RecPos pos (_, f) n z (_, x) e) t = do
-    n' <- checkTau n TyNat
-    z' <- checkTau z t
+-- derive that `Γ ⊢ rec f { z => e0 | s(x) => e } n : t` given
+checkTau (Rec' pos (_, f) n z (_, x) e) t = do
+    n' <- checkTau n Nat -- that `Γ ⊢ n : Nat`
+    z' <- checkTau z t -- and that `Γ ⊢ e0 : t`
+    -- and that `Γ, x:Nat, f:t ⊢ e : t`
     e' <- localEnv $ do
-        bind x TyNat
+        bind x Nat
         bind f t
         checkTau e t
     return (Rec f n' z' x e')
-checkTau (AnnPos pos e tpos) t' = do
+-- derive that `Γ ⊢ (e : t') : t` given
+checkTau (Ann' pos e tpos) t' = do
     let t = toType tpos
-    e' <- checkTau e t
-    unify pos t t'
+    e' <- checkTau e t -- that `Γ ⊢ e : t'`
+    unify pos t t' -- and that `t' ~ t`
     return e'
 
-unify :: SourcePos -> Ty -> Ty -> Tc ()
-unify _ TyNat TyNat = return ()
-unify pos (TyArr t1 t2) (TyArr t1' t2') = do
+unify :: SourcePos -> Type -> Type -> Tc ()
+unify _ Nat Nat = return ()
+unify pos (Arr t1 t2) (Arr t1' t2') = do
     unify pos t1 t1'
     unify pos t2 t2'
-unify pos t@(MetaTy _ _) t' = unifyVar pos t t'
-unify pos t t'@(MetaTy _ ref) = unifyVar pos t' t
+unify pos (MetaType t) t' = unifyVar pos t t'
+unify pos t (MetaType t') = unifyVar pos t' t
 unify pos t t' = failTc $ UnificationFailure pos t t'
 
-unifyFun :: SourcePos -> Ty -> Tc (Ty, Ty)
-unifyFun pos (TyArr a r) = return (a, r)
-unifyFun pos t = do
-    argVar <- newMetaTy
-    resVar <- newMetaTy
-    unify pos t (TyArr argVar resVar)
-    return (argVar, resVar)
-
---FIXME take two types, but the first must be a variable, remove the guard pattern when unifying two tvs in unify
-unifyVar :: SourcePos -> Ty -> Ty -> Tc ()
-unifyVar pos tv1@(MetaTy uniq1 _) tv2@(MetaTy uniq2 _) | uniq1 == uniq2 = return ()
-unifyVar pos tv1@(MetaTy _ ref1) tv2@(MetaTy _ ref2) = do
-    m_t1 <- liftIO $ readIORef ref1
-    m_t2 <- liftIO $ readIORef ref2
-    case (m_t1, m_t2) of
-        (Just t1, _) -> unify pos t1 tv2
-        (Nothing, Just t2) -> liftIO $ ref1 `writeIORef` (Just t2)
-        (Nothing, Nothing) -> liftIO $ ref1 `writeIORef` (Just tv2)
-unifyVar pos tv1@(MetaTy _ ref1) t2 = do
+unifyVar :: SourcePos -> MetaType -> Type -> Tc ()
+unifyVar pos tv1@(uniq1, ref1) tv2@(MetaType (uniq2, ref2)) = 
+    if uniq1 == uniq2 then return ()
+    else do
+        m_t1 <- liftIO $ readIORef ref1
+        m_t2 <- liftIO $ readIORef ref2
+        case (m_t1, m_t2) of
+            (Just t1, _) -> unify pos t1 tv2
+            (Nothing, Just t2) -> liftIO $ ref1 `writeIORef` (Just t2)
+            (Nothing, Nothing) -> liftIO $ ref1 `writeIORef` (Just tv2)
+unifyVar pos tv1@(_, ref1) t2 = do
     m_t1 <- liftIO $ readIORef ref1
     case m_t1 of
         Just t1 -> unify pos t1 t2
         Nothing -> liftIO $ ref1 `writeIORef` (Just t2)
 
-toType :: TypePos -> Ty
-toType (NatPos _) = TyNat
-toType (ArrPos _ t1 t2) = TyArr (toType t1) (toType t2)
-
-newMetaTy :: Tc Ty
-newMetaTy = do
-    uniq <- lift gensym
-    ref <- liftIO $ newIORef Nothing
-    return (MetaTy uniq ref)
-
-failTc :: TypeError -> Tc ()
-failTc = lift . lift . left
-
-instance (Ref.C m) => Ref.C (EitherT e m) where new = newLifted
-
 
  ------ Evaluate ------
+type Eval a = EnvironmentIO Text Term a
+
+eval :: Term -> IO Term
+eval = evalEnvironmentT [] . reduce
+
+reduce :: Term -> Eval Term
+reduce is@(Num n) = return (Num n)
+reduce is@(Lam x e) = do
+    env <- getActiveEnv
+    return (Closure env x e)
+reduce is@(Var x) = fromJust <$> find x
+reduce is@(Inc e) = do
+    (Num n) <- reduce e
+    return $ Num (n+1)
+reduce is@(App f e2) = do
+    (Closure env x e) <- reduce f
+    withEnv env $ localEnv $ do
+        bind x =<< reduce e2
+        reduce e
+reduce is@(Rec f n z x e) = do
+    n' <- reduce n
+    case n' of
+        (Num 0) -> reduce z
+        (Num i) -> localEnv $ do
+            let i' = Num (i-1)
+            bind f =<< reduce (Rec f i' z x e)
+            bind x i'
+            reduce e
 
