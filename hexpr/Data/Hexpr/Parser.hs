@@ -1,3 +1,4 @@
+{-# LANGUAGE FlexibleContexts #-}
 {-| Convenience library for parsing 'Hexpr's, or 'Hierarchy's more generally.
 
     We've built this on the 'Parsec' library and kept the parsing monad implementation
@@ -43,6 +44,7 @@ module Data.Hexpr.Parser (
     , parseSexpr
     -- ** Parsing Atoms
     , parseIdentifier
+    , codingChar
     , naturalLiteral
     , floatLiteral
     , stringLiteralChar
@@ -224,6 +226,25 @@ parseIdentifier p1 pRest = do
     x <- p1
     xs <- many pRest
     return (x:xs)
+
+{-| Accept unicode characters that could reasonably be used in a source code identifier.
+    It rejects any space characters, separators, control/format characters as well as private
+    use and unassigned characters. Pass a predicate function in to exclude further characters.
+    All other unicode characters are accepterd: letters, marks, punctuation and symbols.
+-}
+codingChar :: (Monad m, Stream s m Char) => (Char -> Bool ) -> ParsecT s u m Char
+codingChar p = satisfy $ \c -> isCodingChar c && not (p c)
+    where
+    isCodingChar c = case generalCategory c of
+        Space -> False
+        LineSeparator -> False
+        ParagraphSeparator -> False
+        Control -> False
+        Format -> False
+        Surrogate -> False
+        PrivateUse -> False
+        NotAssigned -> False
+        _ -> True --Letter, Mark, Number, Punctuation/Quote, Symbol
 
 {-| Parse an integer literal of the form @\/0x[0-9a-fA-F]+|0o[0-7]+|0b[01]+|[0-9]+\/@.
     
