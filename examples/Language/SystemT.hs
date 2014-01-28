@@ -76,16 +76,20 @@ lang = (emptyLang ()) { _atom = [ choice [ kw ":"      KwAnn
                                          , kw "\955"   KwLam
                                          , kw "lambda" KwLam
                                          ]
-                                , liftPos (flip N)           naturalLiteral
-                                , liftPos (flip V . intern) (parseIdentifier letter letter)
+                                , nat
+                                , ident
                                 ]
                       , _lineComment = void . try $ string "--"
                       }
     where
-    liftPos wrap parse = tokenize $ do
+    nat = tokenize $ do
         pos <- getPosition
-        x <- wrap <$> parse
-        return (x pos)
+        (n, _) <- naturalLiteral
+        return (N pos n)
+    ident = tokenize $ do
+        pos <- getPosition
+        name <- intern <$> parseIdentifier letter letter
+        return (V pos name)
     kw str res = tokenize $ do
         pos <- getPosition
         x <- try $ string str

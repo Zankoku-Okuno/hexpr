@@ -45,8 +45,11 @@ module Data.Hexpr.Parser (
     -- ** Parsing Atoms
     , parseIdentifier
     , codingChar
+    , signLiteral
     , naturalLiteral
-    , floatLiteral
+    , naturalBase
+    , mantissaLiteral
+    , exponentLiteral
     , stringLiteralChar
     , parseHereDoc
     , tokenize
@@ -218,6 +221,7 @@ parseLiterateFile leader p = do
     cleanedLine s = replicate leadingSpaces ' ' ++ drop leadingSpaces s
     leadingSpaces = length leader
 
+
 {-| Given two 'Char' parsers, parse one character of the first, and many characters
     of the second.
 -}
@@ -246,30 +250,79 @@ codingChar p = satisfy $ \c -> isCodingChar c && not (p c)
         NotAssigned -> False
         _ -> True --Letter, Mark, Number, Punctuation/Quote, Symbol
 
+
+{-| Parse arithmentic sign, default positive, using @\/[+-]?\/@ -}
+signLiteral :: (Monad m) => HexprParserT u h a m Integer
+signLiteral = option 1 $ (char '-' >> return (-1)) <|> (char '+' >> return 1)
+
 {-| Parse an integer literal of the form @\/0x[0-9a-fA-F]+|0o[0-7]+|0b[01]+|[0-9]+\/@.
-    
+    The integer parse is the first of the returned pair. The second is the base.
+
     The unary operators negate and positive are not parsed, since they may depend
     on the language in question.
 -}
-naturalLiteral :: (Monad m) => HexprParserT u h a m Integer
+naturalLiteral :: (Monad m) => HexprParserT u h a m (Integer, Integer)
 naturalLiteral = choice [ baseInt 16 "xX" hexDigit
                         , baseInt 8  "xX" octDigit
                         , baseInt 2  "bB" (oneOf "01")
                         , decInt
                         ]
     where
-    decInt = stringToInteger 10 <$> many1 digit
+    decInt = do
+        n <- stringToInteger 10 <$> many1 digit
+        return (n, 10)
     baseInt base sigils digit = do
         try $ char '0' >> oneOf sigils
-        stringToInteger base <$> many1 digit
+        n <- stringToInteger base <$> many1 digit
+        return (n, base)
 
-{-| Parse a floating point literal of the form @\/[+-]?[0-9]+\\.[0-9]+([eE][0-9]+)?\/@.
+{-| Parse a natural number given a base (2, 8, 10 or 16). 
+
+    Neither sign nor prefix are parsed, just the digits.
+-}
+naturalBase :: (Monad m) => Integer -> HexprParserT u h a m Integer
+naturalBase  2 = stringToInteger  2 <$> many1 (oneOf "01")
+naturalBase  8 = stringToInteger 8  <$> many1 octDigit
+naturalBase 10 = stringToInteger 10 <$> many1 digit
+naturalBase 16 = stringToInteger 16 <$> many1 hexDigit
+naturalBase _ = error "naturalBase: unrecognized base (expecting 2, 8, 10 or 16)"
+
+{-| Parse the second half of a point literal with the form @\/\\.[0-9]+\/@.
+    The form above is for a decimal base; alternate bases can also be passed in.
+    The bases 2, 8, 10 and 16 are understood.
 
     As with 'naturalLiteral', the unary operators negate and positive are not parsed.
     Further, @+inf@, @-inf@ and @NaN@ are not parsed.
 -}
-floatLiteral :: (Monad m) => HexprParserT u h a m Double --FIXME should be multiple-precision
-floatLiteral = parserZero --STUB
+mantissaLiteral :: (Monad m) => Integer -> HexprParserT u h a m Rational
+mantissaLiteral base = do
+    char '.'
+    stringToMantissa base <$> many1 xDigit
+    where
+    xDigit = case base of
+        2  -> oneOf "01"
+        8  -> octDigit
+        10 -> digit
+        16 -> hexDigit
+        _ -> error "unrecognized base in Data.Hexpr.Parser.mantissaLiteral"
+
+{-| Parse the exponent of a floating point literal with the form 
+    @\/([eE][+-]?[0-9]+|[hH][+-]?[0-9a-fA-F]+)?\/@
+-}
+exponentLiteral :: (Monad m) => HexprParserT u h a m Rational
+exponentLiteral = option 1 (decimalExp <|> hexExp)
+    where
+    decimalExp = do
+        oneOf "eE"
+        sign <- signLiteral
+        e <- stringToInteger 10 <$> many1 digit
+        return $ 10 ^^ (sign * e)
+    hexExp = do
+        oneOf "hH"
+        sign <- option 1 $ (char '-' >> return (-1)) <|> (char '+' >> return 1)
+        e <- stringToInteger 16 <$> many1 hexDigit
+        return $ 16 ^^ (sign * e)
+
 
 {-| Parse a single (meaningful) character or else an empty character. This should be applicable
     to both character and string literals. For character literals, use this function directly,
@@ -305,7 +358,7 @@ floatLiteral = parserZero --STUB
 @
 -}
 stringLiteralChar :: (Monad m) => HexprParserT u h a m (Maybe Char)
-stringLiteralChar = normalChar <|> escape
+stringLiteralChar = normalChar <|> try escape
     where
     normalChar = Just <$> satisfy (\c -> c >= ' ' && c `notElem` "\DEL\"\\")
     escape = char '\\' >> choice [specialEscape, numericalEscape, lineContinue]
@@ -362,6 +415,7 @@ parseHereDoc prefix = do
     terminate <- anyChar `manyTill` (char '\n')
     let terminalLine = string $ if terminate == "\n" then "\n" else ('\n':terminate)
     anyChar `manyTill` try terminalLine
+
 
 ------ Default Languages ------
 emptyLang :: (Monad m) => u -> HexprLanguageT u h a m

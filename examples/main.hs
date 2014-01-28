@@ -8,6 +8,7 @@ import System.Exit
 import Control.Applicative
 import Control.Monad
 import qualified Language.SystemT as SystemT
+import qualified Language.EtaLisp as EtaLisp
 
 main :: IO ()
 main = do
@@ -18,7 +19,8 @@ main = do
             when missing $ die $ "File `" ++ filename ++ "' does not exist."
             result <- case langname of
             	"t" -> SystemT.run filename
-            	_ -> return . Left $ "Unrecognized language `" ++ langname ++ "'. Try one of: " ++ intercalate ", " ["t"]
+                "etalisp" -> EtaLisp.run filename
+            	_ -> return . Left $ "Unrecognized language `" ++ langname ++ "'. Try one of: " ++ intercalate ", " ["t", "etalisp"]
             case result of
                 Right () -> exitSuccess
                 Left errmsg -> die errmsg
