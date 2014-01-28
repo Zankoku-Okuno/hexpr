@@ -295,6 +295,7 @@ instance Hierarchy Hexpr where
     conjoin (Branch as) (Branch bs) = Branch $ as  ++ bs
 
     adjoin a b = Branch [a, b]
+    adjoins x [] = x
     adjoins x xs = Branch (x:xs)
 
 instance Hierarchy Quasihexpr where
@@ -306,6 +307,7 @@ instance Hierarchy Quasihexpr where
     conjoin a            b            = QBranch $ [a] ++ [b]
 
     adjoin a b = QBranch [a, b]
+    adjoins x [] = x
     adjoins x xs = QBranch (x:xs)
 
 
