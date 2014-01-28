@@ -1,5 +1,5 @@
 {-# LANGUAGE MultiParamTypeClasses, FunctionalDependencies, FlexibleInstances #-}
-module Data.Gensym (
+module Control.Monad.Gensym (
     -- * Generate Symbols
       Gensym(..)
     -- * Symbol Generator Monad
@@ -16,6 +16,7 @@ import Control.Monad
 import Control.Monad.Identity
 import Control.Monad.State.Strict
 import Control.Monad.Trans
+import Control.Monad.Trans.Either
 import Data.Ref (new, newLifted)
 import qualified Data.Ref as Ref
 
@@ -91,6 +92,7 @@ instance (MonadIO m) => MonadIO (SymbolGenT s m) where
 instance (Ref.C m) => Ref.C (SymbolGenT s m) where new = newLifted
 
 ------ Transformer Instances ------
+instance (Ref.C m) => Ref.C (EitherT e m) where new = newLifted
     
 --TODO instances for other stdlib & spinelib monads
 

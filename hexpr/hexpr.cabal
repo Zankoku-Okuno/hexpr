@@ -55,9 +55,9 @@ library
                        Data.Hexpr.Desugar,
                        Data.Hexpr.Distfix,
                        Data.Sexpr,
-                       Data.Gensym,
-                       Data.Environment,
-                       Data.Struct
+                       Data.FiniteType,
+                       Control.Monad.Gensym,
+                       Control.Monad.Environment
   
   -- Modules included in this library but not exported.
   -- other-modules:       
@@ -65,6 +65,7 @@ library
   -- Other library packages from which modules are imported.
   build-depends:       base ==4.6.*,
                        mtl ==2.1.*,
+                       either ==4.1.*,
                        parsec ==3.0.*,
                        data-ref
   

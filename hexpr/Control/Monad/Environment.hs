@@ -1,4 +1,4 @@
-module Data.Environment (
+module Control.Monad.Environment (
       EnvironmentT
     , Env
     , MEnv

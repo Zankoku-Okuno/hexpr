@@ -67,8 +67,9 @@
         * Other pairs of matches have no priority distinction.
 
     Given that a particular distfix is detected and selected for rewriting, we rewrite the list of
-    terms by /extracting/ the distfix from its slots. Specifically, the rewritten list consists of
-    some element (given in the 'Distfix' definition) followed by each (filled) slot in order and
+    terms by /extracting/ the distfix from its slots. Specifically, we take the detected elements
+    and run them through the distfix's /rewriter/ to produce some single element. We then place the
+    rewritten element at the front of the node, followed by each (filled) slot in order and
     'rewrap'ped in its own node. The re-written list is finally 'rewrap'ped and placed back in
     its original context.
 
@@ -156,7 +157,7 @@ class DistfixElement a where
     match :: a -> a -> Bool
 
 {-| A distfix consists of
-        1) a rewrite element (to precede the slots when extracting),
+        1) a rewriter, the results of which precede the slots when extracting,
         2) a topology and associativity, which is actually merged into a single datatype 'Shape'
             because the choice of associativity is not independent of topology, and
         3) a non-empty list of keywords, each implicitly separated by a slot.
@@ -166,7 +167,7 @@ class DistfixElement a where
 
     For more detail on these components, see the module documentation.
 -}
-data Distfix a = Distfix a Shape [a]
+data Distfix a = Distfix ([a] -> a) Shape [a]
 {-| Information on both topology and associativity.
 
     The two properties are merged into one datatype because choice of one limits choice of the
@@ -184,7 +185,7 @@ data Shape = Closed | HalfOpenRight | HalfOpenLeft | OpenRight | OpenLeft | Open
 -}
 type DistfixTable a = [[Distfix a]]
 
-newtype Detection a = Detection { unMatch :: (Distfix a, [a], [[a]], [a]) }
+newtype Detection a = Detection { unMatch :: (Distfix a, [a], [a], [[a]], [a]) }
 data MatchResult a = NoMatch
                    | OneMatch (Detection a)
                    | Ambiguous [Detection a]
@@ -212,7 +213,7 @@ newtype DistfixResult' e a = Result { unResult :: Either (DistfixError e) a }
     efficiency (and possibly complicate matters). Still, at least everything that /should/ be an
     error /is/ an error.
 -}
-data DistfixError a = AmbiguousErr [(Distfix a, [a], [[a]], [a])]
+data DistfixError a = AmbiguousErr [(Distfix a, [a], [a], [[a]], [a])]
                     | LeftoverErr [a]
 
 
@@ -255,8 +256,8 @@ runDistfix table x = case unwrap x of
     I'm pretty sure it's necessary to pass the recursion in anyway (but I can't remember why).
 -}
 extract :: DistfixStructure a => ([a] -> DistfixResult a) -> ([a] -> a) -> Detection a -> DistfixResult a
-extract recurse rewrap (Detection (Distfix distfix _ _, before, inside, after)) = do
-    inside' <- rewrap . (distfix:) <$> mapM recurse inside
+extract recurse rewrap (Detection (Distfix rewrite _ _, found, before, inside, after)) = do
+    inside' <- rewrap . (rewrite found:) <$> mapM recurse inside
     recurse $ before ++ [inside'] ++ after
 
 
@@ -279,7 +280,7 @@ select ops xs = impl detectAll []
 
 {-| Given two detections, give the relative priority of the first to the second. -}
 decidePriority :: Detection a -> Detection a -> Priority
-decidePriority a@(Detection (Distfix _ topA ksA, bA, iA, aA)) b@(Detection (Distfix _ topB ksB, bB, iB, aB)) = case (topA, topB) of
+decidePriority a@(Detection (Distfix _ topA ksA, _, bA, iA, aA)) b@(Detection (Distfix _ topB ksB, _, bB, iB, aB)) = case (topA, topB) of
     (OpenLeft,      OpenLeft)      -> decideLeft
     (OpenLeft,      HalfOpenLeft)  -> decideLeft
     (HalfOpenLeft,  OpenLeft)      -> decideLeft
@@ -314,15 +315,15 @@ decidePriority a@(Detection (Distfix _ topA ksA, bA, iA, aA)) b@(Detection (Dist
         bL = leftmostKeyword b
         bR = rightmostKeyword b
     mostKeywords = fromOrd $ comparing impl a b
-        where impl (Detection (Distfix _ _ ks, _, _, _)) = length ks
+        where impl (Detection (Distfix _ _ ks, _, _, _, _)) = length ks
     -- index of leftmost keyword in the original node
-    leftmostKeyword (Detection (Distfix _ OpenRight _, _, inside, _)) = length (head inside)
-    leftmostKeyword (Detection (Distfix _ HalfOpenRight _, before, _, _)) = length before
-    leftmostKeyword (Detection (Distfix _ Closed _, before, _, _)) = length before
+    leftmostKeyword (Detection (Distfix _ OpenRight _, _, _, inside, _)) = length (head inside)
+    leftmostKeyword (Detection (Distfix _ HalfOpenRight _, _, before, _, _)) = length before
+    leftmostKeyword (Detection (Distfix _ Closed _, _, before, _, _)) = length before
     -- index of rightmost keyword in the original node
-    rightmostKeyword (Detection (Distfix _ OpenLeft _, _, inside, _)) = sum (map length $ init inside) + (length (init inside) - 1)
-    rightmostKeyword (Detection (Distfix _ HalfOpenLeft _, _, inside, _)) = sum (map length inside) + (length inside - 1)
-    rightmostKeyword (Detection (Distfix _ Closed _, before, inside, _)) = length before + sum (map length inside) + length inside
+    rightmostKeyword (Detection (Distfix _ OpenLeft _, _, _, inside, _)) = sum (map length $ init inside) + (length (init inside) - 1)
+    rightmostKeyword (Detection (Distfix _ HalfOpenLeft _, _, _, inside, _)) = sum (map length inside) + (length inside - 1)
+    rightmostKeyword (Detection (Distfix _ Closed _, _, before, inside, _)) = length before + sum (map length inside) + length inside
 
 
 ------ Detection ------
@@ -339,64 +340,68 @@ findLeftovers rewrap ks xs = case filter (\x -> nodeMatch x `any` ks) xs of
 detect :: DistfixStructure a => [a] -> Distfix a -> Maybe (Detection a)
 detect xs fix@(Distfix _ topology ks) = do
     when (length ks == 0) $ error "distfixes must have at least one keyword"
-    (before, inside, after) <- case topology of
+    (found, before, inside, after) <- case topology of
         Closed -> do
             when (length ks < 2) $ error "closed distfixes must have at least two keywords"
-            (as, ds) <- findKey    (head ks)          xs
-            (cs, bs) <- revFindKey (last ks)          ds
-            res      <- detectBody (init . tail $ ks) cs
-            return (as, res, bs)
+            (as, kw1, ds) <- findKey    (head ks)          xs
+            (cs, kw, bs)  <- revFindKey (last ks)          ds
+            (kws, res)     <- detectBody (init . tail $ ks) cs
+            Just ([kw1]++kws++[kw], as, res, bs)
         HalfOpenRight -> do
-            (as, bs) <- findKey (head ks) xs
-            res <- detectBody (tail ks) bs
-            return (as, res, [])
+            (as, kw1, bs) <- findKey (head ks) xs
+            (kws, res)    <- detectBody (tail ks) bs
+            Just ([kw1]++kws, as, res, [])
         HalfOpenLeft -> do
-            (as, bs) <- revFindKey (last ks) xs
-            res <- revDetectBody (init ks) as
-            return ([], res, bs)
+            (as, kw, bs) <- revFindKey (last ks) xs
+            (kws, res)   <- revDetectBody (init ks) as
+            Just (kws++[kw], [], res, bs)
         OpenRight -> do
-            (as, bs) <- findKey (head ks) xs -- find the first one, so the following ones get wrapped in implicit parens
-            res <- detectBody (tail ks) bs
-            return ([], as:res, [])
+            (as, kw1, bs) <- findKey (head ks) xs -- find the first one, so the following ones get wrapped in implicit parens
+            (kws, res)    <- detectBody (tail ks) bs
+            Just ([kw1]++kws, [], as:res, [])
         OpenLeft -> do
-            (as, bs) <- revFindKey (last ks) xs -- find the last one, so the preceding ones get wrapped in implicit parens
-            res <- revDetectBody (init ks) as
-            return ([], res++[bs], [])
+            (as, kw, bs) <- revFindKey (last ks) xs -- find the last one, so the preceding ones get wrapped in implicit parens
+            (kws, res)   <- revDetectBody (init ks) as
+            Just (kws++[kw], [], res++[bs], [])
         OpenNon -> do
-            (as, bs) <- findKey (head ks) xs
-            res <- detectBody (tail ks) bs
+            (as, kw1, bs) <- findKey (head ks) xs
+            (kws, res)    <- detectBody (tail ks) bs
             if isJust $ detect (last res) fix
                 then Nothing
-                else return ([], as:res, [])
+                else Just ([kw1]++kws, [], as:res, [])
     if null `any` inside
         then Nothing
-        else Just $ Detection (fix, before, inside, after)
+        else Just $ Detection (fix, found, before, inside, after)
 
 {-| recognize keyword-slot pairs left-to-right, so use as a continuation after stripping away leading/trailing keywords -}
-detectBody :: DistfixStructure a => [a] -> [a] -> Maybe [[a]]
-detectBody [] xs = Just [xs]
-detectBody (k:ks) xs = do
-    (as, bs) <- findKey k xs
-    liftM (as:) (detectBody ks bs)
-{-| as detect body, but right-to-left, for left-associative things -}
-revDetectBody :: DistfixStructure a => [a] -> [a] -> Maybe [[a]]
-revDetectBody ks xs = liftM (map reverse) $ impl (reverse ks) (reverse xs)
+detectBody :: DistfixStructure a => [a] -> [a] -> Maybe ([a], [[a]])
+detectBody ks xs = impl ks xs [] []
     where
-    impl [] xs = Just [xs]
-    impl (k:ks) xs = do
-        (bs, as) <- revFindKey k xs
-        liftM (as:) (revDetectBody ks bs)
+    impl [] xs kws xss = Just (reverse kws, reverse (xs:xss))
+    impl (k:ks) xs kws xss = do
+        (as, kw, bs) <- findKey k xs
+        impl ks bs (kw:kws) (as:xss)
+{-| as detect body, but right-to-left, for left-associative things -}
+revDetectBody :: DistfixStructure a => [a] -> [a] -> Maybe ([a], [[a]])
+revDetectBody ks xs = do
+    (kws, xss) <- impl (reverse ks) (reverse xs) [] []
+    return (kws, map reverse xss)
+    where
+    impl [] xs kws xss = Just (reverse kws, reverse (xs:xss))
+    impl (k:ks) xs kws xss = do
+        (bs, kw, as) <- findKey k xs
+        impl ks bs (kw:kws) (as:xss)
 
 {-| Get the parts of a list (before, after) the given keyword. Start from the left. -}
-findKey :: DistfixStructure a => a -> [a] -> Maybe ([a], [a])
-findKey k xs = case nodeMatch k `break` xs of
+findKey :: DistfixStructure a => a -> [a] -> Maybe ([a], a, [a])
+findKey kw xs = case nodeMatch kw `break` xs of
     res@(_, []) -> Nothing
-    (before, (_:after)) -> Just (before, after)
+    (before, (k:after)) -> Just (before, k, after)
 {-| As findKey, but start from right. -}
-revFindKey :: DistfixStructure a => a -> [a] -> Maybe ([a], [a])
-revFindKey k xs = do
-    (b,a) <- findKey k (reverse xs)
-    return (reverse a, reverse b)
+revFindKey :: DistfixStructure a => a -> [a] -> Maybe ([a], a, [a])
+revFindKey kw xs = do
+    (b,k,a) <- findKey kw (reverse xs)
+    return (reverse a, k, reverse b)
 
 
 ------ Helpers ------

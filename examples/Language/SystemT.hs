@@ -16,8 +16,8 @@ import Control.Monad.Trans.Either
 import Data.Hexpr
 import Data.Hexpr.Parser
 import Data.Hexpr.Desugar
-import Data.Gensym
-import Data.Environment
+import Control.Monad.Gensym
+import Control.Monad.Environment
 
 
 run :: FilePath -> IO (Either String ())
@@ -40,8 +40,6 @@ run filename = runEitherT $ do
         putStr "==> " >> print checked
         putStr "=== " >> print evaled
         --putStrLn "" >> putStrLn (compile checked)
-
-instance (Ref.C m) => Ref.C (EitherT e m) where new = newLifted
 
 
  ------ Parser ------
