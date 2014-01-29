@@ -81,7 +81,7 @@ import Control.Monad.Reader
 import Control.Monad.State
 import Text.Parsec hiding (space, newline)
 
-import Data.Hexpr
+import Data.Hierarchy
 import Data.Sexpr
 
 ------ Types and Entry ------
@@ -160,7 +160,7 @@ parseHexpr :: (Hierarchy h, Monad m) => HexprParserT u h a m (h a)
 parseHexpr = leaf <|> specialNode <|> indentBranch <|> parenBranch
     where
     leaf = individual <$> atom
-    indentBranch = indentize parseBareHexpr >>= \(x:xs) -> return (x `adjoins` xs)
+    indentBranch = indentize parseBareHexpr >>= \(x:xs) -> return (x `adjoinsl` xs)
     parenBranch = parenthesize parseBareHexpr
 
 {-| Parse a branch, with nodes separated by 'separate', but without enclosing parenthesization or
@@ -169,7 +169,7 @@ parseHexpr = leaf <|> specialNode <|> indentBranch <|> parenBranch
 parseBareHexpr :: (Hierarchy h, Monad m) => HexprParserT u h a m (h a)
 parseBareHexpr = do
     (car:cdr) <- parseHexpr `sepEndBy1` separate
-    return $ car `adjoins` cdr    
+    return $ car `adjoinsl` cdr    
 
 {-| Parse an 'Sexpr' with the same strategy as 'parseHexpr'. -}
 parseSexpr :: (Monad m) => HexprParserT u h a m (Sexpr a)
@@ -450,7 +450,7 @@ separate = asks _separate >>= id
 indentize :: (Monad m) => HexprParserT u h a m r -> HexprParserT u h a m [r]
 indentize p = do
     dents <- asks _indentize
-    choice [between before after (p `sepBy1` nextline) | (before, after) <- dents]
+    choice [try $ between before after (p `sepBy1` nextline) | (before, after) <- dents]
 
 {-| Perform a parse between the components of one of the elements of '_parenthesize'.
 
@@ -460,7 +460,7 @@ indentize p = do
 parenthesize :: (Monad m) => HexprParserT u h a m r -> HexprParserT u h a m r
 parenthesize p = do
     parens <- asks _parenthesize
-    choice [between before after p | (before, after) <- parens]
+    choice [try $ between before after p | (before, after) <- parens]
 
 {-| Parse a non-newline space according to '_space'. -}
 space :: (Monad m) => HexprParserT u h a m ()
@@ -521,20 +521,19 @@ dedent = (<?> "dedent") . try $ do
 disableIndentation :: (Monad m) => HexprParserT u h a m r -> HexprParserT u h a m r
 disableIndentation p = do
     st <- get
-    between (put st { _indent = Nothing }) (put st) p
+    put st { _indent = Nothing }
+    (p <* put st) <|> (put st >> parserZero)
+
+{-| Current number of leading spaces. Fails if indentation is disabled. -}
+getIndentLevel :: (Monad m) => HexprParserT u h a m Integer
+getIndentLevel = (\InnerState { _indent = Just (x:_), _quoteLevel = _} -> x) <$> get
 
 {-| Increase quasiquotation level for the passed parser. -}
 withQuasiquote :: (Monad m) => HexprParserT u h a m r -> HexprParserT u h a m r
 withQuasiquote p = do
     st@InnerState { _indent = il, _quoteLevel = Just ql } <- get
     put InnerState { _indent = il, _quoteLevel = Just (ql + 1) }
-    res <- p
-    put st
-    return res
-
-{-| Current number of leading spaces. Fails if indentation is disabled. -}
-getIndentLevel :: (Monad m) => HexprParserT u h a m Integer
-getIndentLevel = (\InnerState { _indent = Just (x:_), _quoteLevel = _} -> x) <$> get
+    (p <* put st) <|> (put st >> parserZero)
 
 
 {-| Decrease quasiquotation level for the passed parser. Fails if quasiquotation level
@@ -545,15 +544,14 @@ withUnquote p = do
     st@InnerState { _indent = il, _quoteLevel = Just ql } <- get
     when (ql <= 0) $ fail "Unexpected unquote outside quasiquote."
     put InnerState { _indent = il, _quoteLevel = Just (ql - 1) }
-    res <- p
-    put st
-    return res
+    (p <* put st) <|> (put st >> parserZero)
 
 {-| Turns quasiquotation off such that 'withQuasiquote' and 'withUnquote' both fail. -}
 disableQuasiquotation :: (Monad m) => HexprParserT u h a m r -> HexprParserT u h a m r
 disableQuasiquotation p = do
     st <- get
-    between (put st { _quoteLevel = Nothing }) (put st) p
+    put st { _quoteLevel = Nothing }
+    (p <* put st) <|> (put st >> parserZero)
 
 {-| Current number of enclosing quasiquotes minus enclosing unquotes.
     Fails if quasiquotation is disabled.

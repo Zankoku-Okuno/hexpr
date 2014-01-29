@@ -14,16 +14,17 @@ import Data.Text (Text, pack, unpack)
 import qualified Data.Text as T
 import Data.Symbol
 import Data.Maybe
+import Data.Either
 import Data.List
 
-import Control.Applicative ((<$>), (<*>))
+import Control.Applicative ((<$>), (<*>), (*>), (<*))
 import Control.Monad
 
 import Text.Parsec ( ParseError
                    , SourcePos, getPosition
                    , char, string, oneOf
                    , try, (<|>), choice, option, lookAhead
-                   , many, sepEndBy, between
+                   , many, sepBy, sepEndBy, between
                    )
 
 import Data.Hexpr
@@ -53,6 +54,9 @@ lang :: HexprLanguage Quasihexpr Atom
 lang = (emptyLang ()) { _atom = map try [unitLit, numLit, chrLit, strLit, name, list, xons, dotExpr] --TODO heredoc
                       , _specialNode = [quote, quasiquote, unquote, unquoteSplicing]
                       , _indentize = [(indent, dedent), (try (string "\\\\" >> indent), dedent)]
+                      , _separate = do
+                                    lookAhead $ oneOf " ()#\n\t,"
+                                    tokenize $ return ()
                       , _lineComment = void $ char '#'
                       , _blockComment = (void . try $ string "#{", void . try $ string "}#")
                       }
@@ -115,26 +119,30 @@ name = do
     
 list :: HexprParser () Quasihexpr Atom Atom
 list = (uncurry List <$>) . tokWithPos $ do 
-        char '[' >> plentySpace (return ())
-        xs <- tokenize parseBareHexpr `sepEndBy` comma
-        plentySpace (char ']')
-        return xs
+        char '['
+        disableIndentation $ do 
+            xs <- tokenize parseBareHexpr `sepEndBy` comma
+            tokenize $ char ']'
+            return xs
 
 xons :: HexprParser () Quasihexpr Atom Atom
 xons = do
     (loc, (numbered, named)) <- tokWithPos $ do
-        char '{' >> plentySpace (return ())
-        numbered <- tokenize parseBareHexpr `sepEndBy` comma
-        named    <- tokenize namedField     `sepEndBy` comma
-        plentySpace (char '}')
-        return (numbered, named)
+        char '{'
+        disableIndentation $ do
+            xs <- (try numberedField <|> namedField) `sepEndBy` comma
+            tokenize $ char '}'
+            return $ partitionEithers xs
     return $ Xons loc numbered named
     where
-    namedField = do
+    numberedField :: HexprParser () Quasihexpr Atom (Either (Quasihexpr Atom) (Symbol, Quasihexpr Atom))
+    numberedField = tokenize (Left <$> parseBareHexpr)
+    namedField :: HexprParser () Quasihexpr Atom (Either (Quasihexpr Atom) (Symbol, Quasihexpr Atom))
+    namedField = tokenize $ do
         char ':'
         n <- intern <$> bareName
         e <- tokenize parseBareHexpr
-        return (n, e)
+        return $ Right (n, e)
 
 dotExpr :: HexprParser () Quasihexpr Atom Atom
 dotExpr = uncurry Dot <$> tokWithPos (char '.' >> parseHexpr )
@@ -165,8 +173,7 @@ tokWithPos parser = tokenize $ do
     pos <- getPosition
     return ((pos0, pos), res)
 
-comma = try $ plentySpace (char ',' >> separate)
-plentySpace = disableIndentation . tokenize
+comma = try . tokenize $ char ','
 between2 p = between p p
 
 

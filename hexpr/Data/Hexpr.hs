@@ -30,8 +30,6 @@ module Data.Hexpr (
     -- * Primary Data Structures
       Hexpr(..)
     , Quasihexpr(..)
-    -- ** General Classes
-    , Hierarchy(..)
     -- ** Smart Constructors
     , node
     , quasinode
@@ -44,6 +42,8 @@ module Data.Hexpr (
 
 import Data.List
 import Control.Applicative
+
+import Data.Hierarchy
 
 
 ------ Types ------
@@ -294,9 +294,8 @@ instance Hierarchy Hexpr where
     conjoin (Branch as) b@(Leaf _)  = Branch $ as  ++ [b]
     conjoin (Branch as) (Branch bs) = Branch $ as  ++ bs
 
-    adjoin a b = Branch [a, b]
-    adjoins x [] = x
-    adjoins x xs = Branch (x:xs)
+    adjoinsl x [] = x
+    adjoinsl x xs = Branch (x:xs)
 
 instance Hierarchy Quasihexpr where
     individual = QLeaf
@@ -306,93 +305,10 @@ instance Hierarchy Quasihexpr where
     conjoin a            (QBranch bs) = QBranch $ [a] ++ bs
     conjoin a            b            = QBranch $ [a] ++ [b]
 
-    adjoin a b = QBranch [a, b]
-    adjoins x [] = x
-    adjoins x xs = QBranch (x:xs)
+    adjoinsl x [] = x
+    adjoinsl x xs = QBranch (x:xs)
 
 
 -- | because I'm willing to be unsafe here, just don't export
 conjoins xs = head xs `conjoinsl` tail xs
-
---FIXME everything below (well, useless comments aside) goes into a new module, `Data.Hierarchy`, possibly in a different package once I have a whole lot of new, very general stuff of my own
---TODO there may also be unordered forms of Hierarchy, in which conjoin and/or adjoin are commutative
-
---minimal implementation set is individal, conjoin and adjoin
--- a `conjoin` (b `adjoin` c) === (a `adjoin` b) `conjoin` c
--- if it's a pointed, individual = point
--- if it's a monoid, conjoin = mappend (also, it out be ordered)
-{-| A hierarchy is a set, together with an associative operation and a non-associative operation,
-    as well as a duality law, which we'll get to after introducing the notation.
-
-    Ideally, I'd call the associative operation @++@ or @\<\>@, but the cool infix operators are
-    spoken for already, so I'll have to go with descriptive names.
-    Raising items into the hierarchy is done with 'individual'.
-    We call the associative operation 'conjoin'
-    and the non-associative 'adjoin'.
-    The names literally mean \"join together\" and \"join to\", which succinctly convey the
-    associativity properties of each. Well, \"join to\" might seem non-specific, but consider
-    building a house in the wrong order as opposed to joining several cups of water in the wrong
-    order. \"Ad-\" and \"con-\" have these meanings, even if the prepositions I've used as
-    translation aren't so fine-grained.
-
-    The duality law is:
-
-    @
-    a `conjoin` (b `adjoin` c) === (a `adjoin` b) `conjoin` c
-    @
-
-    The minimal implementation is 'individual', 'conjoin', 'adjoin'.
-
-    Hierarchies share some properties with other abstract structures, so here are some
-    equivalences that must hold, provided the specific structure actually is shared:
-
-    * 'individual' === 'pure' === 'return'
-
-    * 'conjoin' === 'mappend' === '<>' === '<|>'
-
-    Some hierarchies may be commutative in conjoin and/or adjoin. For example, file systems
-    (ignoring links) are hierarchies: adjoin creates new directories (though it is not
-    the only way), and 'conjoin' adds files/directories into an existing directory, or creates a
-    new two-element directory. Clearly, conjoin is commutative here. In 'Hexpr's, neither operation
-    is commutative.
--}
-class Hierarchy f where
-    {-| Create a singleton hierarchy. -}
-    individual :: a -> f a
-    {-|
-    @
-    (a `conjoin` b) `conjoin` c === a `conjoin` (b `conjoin` c)
-    @
-    -}
-    conjoin :: f a -> f a -> f a
-    {-|
-    @
-    (a `adjoin` b) `adjoin` c =/= a `adjoin` (b `adjoin` c)
-    @
-    -}
-    adjoin :: f a -> f a -> f a
-
-    {-| Adjoin many nodes in the same level. -}
-    adjoins :: f a -> [f a] -> f a
-
-    {-| Conjoin one or more hierarchies.
-
-    @
-    conjoinsl a [x1, ..., xn] === a `conjoin` x1 `conjoin` ... `conjoin` xn
-    @
-    -}
-    conjoinsl :: f a -> [f a] -> f a
-    conjoinsl acc [] = acc
-    conjoinsl acc (x:xs) = (acc `conjoin` x) `conjoinsl` xs
-    {-| Conjoin one or more hierarchies.
-
-    @
-    conjoinsr [x1, ..., xn] a === x1 `conjoin` ... `conjoin` xs `conjoin` a
-    @
-    -}
-    conjoinsr :: [f a] -> f a -> f a
-    conjoinsr [] base = base
-    conjoinsr (x:xs) base = (x `conjoinsl` xs) `conjoin` base
-
-    --TODO MAYBE adjoinsl/adjoinsr
 

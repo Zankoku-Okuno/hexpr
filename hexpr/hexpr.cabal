@@ -50,22 +50,23 @@ cabal-version:       >=1.8
 
 library
   -- Modules exported by the library.
-  exposed-modules:     Data.Hexpr,
-                       Data.Hexpr.Parser,
-                       Data.Hexpr.Desugar,
-                       Data.Hexpr.Distfix,
-                       Data.Sexpr,
-                       Data.FiniteType,
-                       Control.Monad.Gensym,
-                       Control.Monad.Environment
+  exposed-modules:  Data.Hierarchy,
+                    Data.Hexpr,
+                    Data.Hexpr.Parser,
+                    Data.Hexpr.Desugar,
+                    Data.Hexpr.Distfix,
+                    Data.Sexpr,
+                    Data.FiniteType,
+                    Control.Monad.Gensym,
+                    Control.Monad.Environment
   
   -- Modules included in this library but not exported.
   -- other-modules:       
   
   -- Other library packages from which modules are imported.
-  build-depends:       base ==4.6.*,
-                       mtl ==2.1.*,
-                       either ==4.1.*,
-                       parsec ==3.0.*,
-                       data-ref
+  build-depends:    base ==4.6.*,
+                    mtl ==2.1.*,
+                    either ==4.1.*,
+                    parsec ==3.0.*,
+                    data-ref
   
