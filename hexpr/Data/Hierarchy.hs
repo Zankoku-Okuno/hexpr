@@ -14,7 +14,6 @@
 -}
 module Data.Hierarchy (
       Hierarchy(..)
-    , unsafeAdjoins
     , Openable(..)
     , OpenAp
     ) where
@@ -97,11 +96,11 @@ class Hierarchy h where
     conjoinsr [] base = base
     conjoinsr (x:xs) base = (x `conjoinsl` xs) `conjoin` base
 
-{-| Package a non-empty list into a hierarchy. Fail on empty input. -}
-unsafeAdjoins :: (Hierarchy h) => [h a] -> h a
-unsafeAdjoins [] = error "Cannot construct hierarchy of zero elements."
-unsafeAdjoins [x] = x
-unsafeAdjoins (x:xs) = x `adjoinsl` xs
+    {-| Package a non-empty list into a hierarchy. Fail on empty input. -}
+    unsafeAdjoins :: (Hierarchy h) => [h a] -> h a
+    unsafeAdjoins [] = error "Cannot construct hierarchy of zero elements."
+    unsafeAdjoins [x] = x
+    unsafeAdjoins (x:xs) = x `adjoinsl` xs
 
 
 {-| It is often useful to look at the elements of a node in a 'Hierarchy', perform
