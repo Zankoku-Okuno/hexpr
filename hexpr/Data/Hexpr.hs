@@ -308,6 +308,16 @@ instance Hierarchy Quasihexpr where
     adjoinsl x [] = x
     adjoinsl x xs = QBranch (x:xs)
 
+instance Openable Hexpr where
+    openAp (f, _) (Leaf x) = Leaf (f x)
+    openAp (_, f) (Branch xs) = node (f xs)
+
+instance Openable Quasihexpr where
+    openAp (f, _) (QLeaf x) = QLeaf (f x)
+    openAp (_, f) (QBranch xs) = quasinode (f xs)
+    openAp fs (Quasiquote x) = Quasiquote (openAp fs x)
+    openAp fs (Unquote x) = Unquote (openAp fs x)
+    openAp fs (Splice x) = Splice (openAp fs x)
 
 -- | because I'm willing to be unsafe here, just don't export
 conjoins xs = head xs `conjoinsl` tail xs

@@ -51,14 +51,14 @@ cabal-version:       >=1.8
 library
   -- Modules exported by the library.
   exposed-modules:  Data.Hierarchy,
+                    Data.Sexpr,
                     Data.Hexpr,
                     Data.Hexpr.Parser,
-                    Data.Hexpr.Desugar,
-                    Data.Hexpr.Distfix,
-                    Data.Sexpr,
-                    Data.FiniteType,
+                    Language.Desugar,
+                    Language.Distfix,
                     Control.Monad.Gensym,
-                    Control.Monad.Environment
+                    Control.Monad.Environment,
+                    Data.FiniteType
   
   -- Modules included in this library but not exported.
   -- other-modules:       

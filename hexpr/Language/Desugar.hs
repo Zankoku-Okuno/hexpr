@@ -1,0 +1,129 @@
+module Language.Desugar (
+    -- * List Splitting
+      tripBy
+    , revTripBy
+    , SplitFunction
+    -- * Implicit Parenthesis
+    , addParens
+    , addShortParens
+    -- * Simple Infixes
+    , leftInfix
+    , rightInfix
+    , nonInfix
+    ) where
+
+import Data.List
+import Data.Hierarchy
+import Data.Hexpr
+
+
+{-| Transform a list based on the presence and location of an element.
+
+    The first function of the pair is applied when no element was found.
+    Its parameter is the original list.
+
+    The second of the pair is applied with an element is found.
+    Its parameters are (in order) the preceding elements, the found element, and the
+    following elements.
+-}
+type SplitFunction a b = ([a] -> b, [a] -> a -> [a] -> b)
+
+{-| Split a list at the first element that matched the predicate.
+    If the element was not found, apply the 'SplitFunction'.
+-}
+tripBy :: (a -> Bool) -> SplitFunction a b -> [a] -> b
+tripBy p (onNo, onYes) xs = case break p xs of
+    (before, []) -> onNo xs
+    (before, x:after) -> onYes before x after
+
+{-| As 'tripBy', but search from the end.
+-}
+revTripBy :: (a -> Bool) -> SplitFunction a b -> [a] -> b
+revTripBy p (onNo, onYes) xs = case break p (reverse xs) of
+    (rBefore, []) -> onNo xs
+    (rAfter, rBefore) -> onYes (reverse rBefore) (last rAfter) (reverse $ init rAfter)
+
+{-| Create a group around a found subnode and all following nodes.
+    If no node was found, then there is no change.
+
+    E.g
+@
+    (a b lambda x y z) ===> (a b (lambda x y z))
+@
+-}
+addParens :: (Openable h, Hierarchy h) => (h a -> Bool) -> h a -> h a
+addParens p = openAp (id, tripBy p (id, onYes))
+    where
+    onYes before x after = before ++ [x `adjoinsl` after]
+
+{-| Add parenthesis around a found subnode and at most one following node.
+    Associates to the right.
+    If no node was found, then there is no change.
+
+    E.g.
+@
+    (++ ++ x) ===> (++(++(x)))
+@
+-}
+addShortParens :: (Openable h, Hierarchy h) => (h a -> Bool) -> h a -> h a
+addShortParens p = openAp (id, tripBy p (id, onYes))
+    where
+    onYes before x [] = before++[x]
+    onYes before x after' = case span p after' of
+        ([], []) -> [x]
+        (cont, []) -> before++[deepen (last cont) (reverse (x:init cont))]
+        (cont, next:after) -> before ++ [deepen next (reverse (x:cont))] ++ after
+        where
+        deepen acc [] = acc
+        deepen acc (x:xs) = deepen (x `adjoin` acc) xs
+
+
+{-| Desugar a left-associative infix. If there are no elements to either
+    side of the infix, there is no change.
+
+    E.g.
+@
+    (a b + c d + e f) ===> (+ (+ (a b) (c d)) (e f))
+@
+-}
+leftInfix :: (Openable h, Hierarchy h) => (h a -> Bool) -> h a -> h a
+leftInfix p = openAp (id, revTripBy p (id, onYes))
+    where
+    onYes [] x after = x:after
+    onYes before x [] = before++[x]
+    onYes before x after = [x, leftInfix p (unsafeAdjoins before), unsafeAdjoins after]
+
+{-| Desugar a right-associative infix. If there are no elements to either
+    side of the infix, there is no change.
+
+    E.g.
+@
+    (a b ** c d ** e f) ===> (** (a b) (** (c d) (e f)))
+@
+-}
+rightInfix :: (Openable h, Hierarchy h) => (h a -> Bool) -> h a -> h a
+rightInfix p = openAp (id, tripBy p (id, onYes))
+    where
+    onYes [] x after = x:after
+    onYes before x [] = before++[x]
+    onYes before x after = [x, unsafeAdjoins before, rightInfix p (unsafeAdjoins after)]
+
+{-| Desugar a non-associative infix. If there are no elements to either
+    side of the infix, or if multiple matching elements are present,
+    there is no change.
+
+    E.g.
+@
+    (a b < c d) ===> (< (a b) (c d))
+    (a b < c d < e f) ===> (a b < c d < e f)
+@
+-}
+nonInfix :: (Openable h, Hierarchy h) => (h a -> Bool) -> h a -> h a
+nonInfix p = openAp (id, tripBy p (id, onYes))
+    where
+    onYes [] x after = x:after
+    onYes before x [] = before++[x]
+    onYes before x after = if tripBy p (const True, \_ _ _ -> False) after
+                            then before ++ [x] ++ after
+                            else [x, unsafeAdjoins before, unsafeAdjoins after]
+

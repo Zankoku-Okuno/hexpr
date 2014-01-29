@@ -93,7 +93,7 @@
     @'DistfixElement' SomeType@ and @'DistfixElement' a => 'DistfixStructure' ('Hexpr' a)@, with
     'nodeMatch' simply unwrapping 'Leaf' and delegating to 'match'.
 -}
-module Data.Hexpr.Distfix (
+module Language.Distfix (
     -- * Data Structures
       Distfix(..)
     , Shape(..)

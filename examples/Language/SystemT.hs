@@ -15,7 +15,7 @@ import Control.Monad.Trans
 import Control.Monad.Trans.Either
 import Data.Hexpr
 import Data.Hexpr.Parser
-import Data.Hexpr.Desugar
+import Language.Desugar
 import Control.Monad.Gensym
 import Control.Monad.Environment
 
@@ -120,7 +120,7 @@ isKw kw _ = False
 instance Show Expr' where
     show (Var' _ x) = unintern x
     show (Num' _ n) = show n
-    show (Inc' _ x) = "++ " ++ show x
+    show (Inc' _ x) = "++(" ++ show x ++ ")"
     show (Lam' _ (_, x) t e) = "(\955 (" ++ unintern x ++ " : " ++ show t ++ ") " ++ show e ++ ")" 
     show (Rec' _ (_, f) n z (_, x) e) = "(rec " ++ unintern f ++ " {z => " ++ show z ++ " | ++(" ++ unintern x ++ ") => " ++ show e ++ "} " ++ show n ++ ")"
     show (App' f x) = "(" ++ show f ++ " " ++ show x ++ ")"
@@ -180,7 +180,7 @@ desugarExpr = go . implicitParens
                 Lam' pos x t <$> desugarExpr (node e)
             where
             getVarBind x@(Leaf _) = Left $ Err (getPos x) "Expected annotated variable."
-            getVarBind (Branch xs) = tripBy (isKw KwAnn) missingAnn foundAnn xs
+            getVarBind (Branch xs) = tripBy (isKw KwAnn) (missingAnn, foundAnn) xs
                 where
                 missingAnn xs = Left $ Err (getPos (head xs)) "Expected annotated variable."
                 foundAnn [] ann _ = Left $ Err (getPos ann) "Expected variable."

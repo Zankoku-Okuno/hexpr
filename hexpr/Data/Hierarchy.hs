@@ -14,6 +14,7 @@
 -}
 module Data.Hierarchy (
       Hierarchy(..)
+    , unsafeAdjoins
     , Openable(..)
     , OpenAp
     ) where
@@ -52,22 +53,22 @@ module Data.Hierarchy (
     new two-element directory. Clearly, conjoin is commutative here. For generality, we have
     given default implemetations assuming non-commutativity in both operations.
 -}
-class Hierarchy f where
+class Hierarchy h where
     {-| Create a singleton hierarchy. -}
-    individual :: a -> f a
+    individual :: a -> h a
     {-| Adjoin exactly two nodes in the same level.
     @
     (a `adjoin` b) `adjoin` c =/= a `adjoin` (b `adjoin` c)
     @
     -}
-    adjoin :: f a -> f a -> f a
+    adjoin :: h a -> h a -> h a
     adjoin a b = adjoinsl a [b]
 
     {-| Adjoin many nodes in the same level. The first argument is leftmost. -}
-    adjoinsl :: f a -> [f a] -> f a
+    adjoinsl :: h a -> [h a] -> h a
 
     {-| Adjoin many nodes in the same level. The first argument is rightmost. -}
-    adjoinsr :: [f a] -> f a -> f a
+    adjoinsr :: [h a] -> h a -> h a
     adjoinsr [] a = a
     adjoinsr (a:as) b = adjoinsl a (as++[b])
     
@@ -76,14 +77,14 @@ class Hierarchy f where
     (a `conjoin` b) `conjoin` c === a `conjoin` (b `conjoin` c)
     @
     -}
-    conjoin :: f a -> f a -> f a
+    conjoin :: h a -> h a -> h a
     {-| Conjoin one or more hierarchies.
 
     @
     conjoinsl a [x1, ..., xn] === a `conjoin` x1 `conjoin` ... `conjoin` xn
     @
     -}
-    conjoinsl :: f a -> [f a] -> f a
+    conjoinsl :: h a -> [h a] -> h a
     conjoinsl acc [] = acc
     conjoinsl acc (x:xs) = (acc `conjoin` x) `conjoinsl` xs
     {-| Conjoin one or more hierarchies.
@@ -92,9 +93,15 @@ class Hierarchy f where
     conjoinsr [x1, ..., xn] a === x1 `conjoin` ... `conjoin` xs `conjoin` a
     @
     -}
-    conjoinsr :: [f a] -> f a -> f a
+    conjoinsr :: [h a] -> h a -> h a
     conjoinsr [] base = base
     conjoinsr (x:xs) base = (x `conjoinsl` xs) `conjoin` base
+
+{-| Package a non-empty list into a hierarchy. Fail on empty input. -}
+unsafeAdjoins :: (Hierarchy h) => [h a] -> h a
+unsafeAdjoins [] = error "Cannot construct hierarchy of zero elements."
+unsafeAdjoins [x] = x
+unsafeAdjoins (x:xs) = x `adjoinsl` xs
 
 
 {-| It is often useful to look at the elements of a node in a 'Hierarchy', perform
