@@ -9,28 +9,30 @@ module Language.EtaLisp.Parser (
     , parseLiterate
     ) where
 
+import qualified Data.Text as T
 import Text.Parsec ( ParseError
                    , SourcePos, getPosition
                    , char, string, oneOf
                    , try, choice, option, lookAhead
                    , many, sepBy, sepEndBy, between
+                   , parserZero
                    )
 import Data.Hierarchy
 import Data.Hexpr.Parser
 import Language.EtaLisp.BasicTypes
 
 
-parse :: FilePath -> String -> Either ParseError [RawEL Atom]
+parse :: FilePath -> String -> Either ParseError [Quasihexpr Atom]
 parse source input = runHexprParser lang (parseFile parseEtaLisp) source input
 
-parseLiterate :: FilePath -> String -> Either ParseError [RawEL Atom]
+parseLiterate :: FilePath -> String -> Either ParseError [Quasihexpr Atom]
 parseLiterate source input = runHexprParser lang (parseLiterateFile " > " parseEtaLisp) source input
 
-parseEtaLisp :: HexprParser () RawEL Atom [RawEL Atom]
+parseEtaLisp :: HexprParser () Quasihexpr Atom [Quasihexpr Atom]
 parseEtaLisp = parseBareHexpr `sepEndBy` nextline
 
-lang :: HexprLanguage RawEL Atom
-lang = (emptyLang ()) { _atom = map try [unitLit, numLit, chrLit, strLit, name] --TODO heredoc
+lang :: HexprLanguage Quasihexpr Atom
+lang = (emptyLang ()) { _atom = map try [fieldIs, fieldAt, numLit, chrLit, strLit, name] --TODO heredoc
                       , _specialNode = [dotExpr, list, xons, strExpr, quote, quasiquote, unquote, unquoteSplicing]
                       , _indentize = [(indent, dedent), (try (string "\\\\" >> indent), dedent)]
                       , _separate = do
@@ -41,12 +43,7 @@ lang = (emptyLang ()) { _atom = map try [unitLit, numLit, chrLit, strLit, name] 
                       }
 
 
-unitLit :: HexprParser () RawEL Atom Atom
-unitLit = do
-  (loc, _) <- tokWithPos $ string "()"
-  return (UnitLit loc)
-
-numLit :: HexprParser () RawEL Atom Atom
+numLit :: HexprParser () Quasihexpr Atom Atom
 numLit = do 
     (loc, n) <- tokWithPos (try specialNumber <|> normalNumber)
     return (NumLit loc n)
@@ -69,19 +66,28 @@ numLit = do
         mantissa <- mantissaLiteral base
         exponent <- exponentLiteral
         return $ ((whole % 1) + mantissa) * exponent
-    fractionNotation whole base = char '/' >> (whole %) <$> naturalBase base
+    fractionNotation whole base = do
+        d <- char '/' >> naturalBase base
+        if d == 0 then parserZero else return (whole % d)
         
-chrLit :: HexprParser () RawEL Atom Atom
+chrLit :: HexprParser () Quasihexpr Atom Atom
 chrLit = do 
     (loc, Just c) <- tokWithPos $ between2 (char '\'') ((Just <$> char '\"') <|> stringLiteralChar)
     return (ChrLit loc c)
 
-strLit :: HexprParser () RawEL Atom Atom
+strLit :: HexprParser () Quasihexpr Atom Atom
 strLit = do
     (loc, str) <- tokWithPos $ between2 (char '\"') (catMaybes <$> many stringLiteralChar)
     return (StrLit loc $ pack str)    
 
-name :: HexprParser () RawEL Atom Atom
+fieldIs :: HexprParser () Quasihexpr Atom Atom
+fieldIs = uncurry FieldIs <$> tokWithPos (try $ bareField <* char ':')
+
+fieldAt :: HexprParser () Quasihexpr Atom Atom
+fieldAt = uncurry FieldAt <$> tokWithPos (char ':' >> bareField)
+
+
+name :: HexprParser () Quasihexpr Atom Atom
 name = do
     (loc, sym) <- tokWithPos bareName
     return $ case sym of
@@ -97,66 +103,79 @@ name = do
         _ -> Var loc (intern sym)
     
 
-list :: HexprParser () RawEL Atom (RawEL Atom)
-list = (uncurry List <$>) . tokWithPos $ do 
+list :: HexprParser () Quasihexpr Atom (Quasihexpr Atom)
+list = do
+    (loc, xs) <- tokWithPos $ do 
         char '['
         disableIndentation $ do 
-            xs <- tokenize parseBareHexpr `sepEndBy` comma
+            xs <- try (tokenize parseBareHexpr) `sepEndBy` comma
             tokenize $ char ']'
             return xs
+    return $ if null xs
+        then individual (Builtin loc Nil)
+        else individual (Builtin loc List) `adjoinsl` xs
 
-xons :: HexprParser () RawEL Atom (RawEL Atom)
-xons = (uncurry Xons <$>) . tokWithPos $ do
+xons :: HexprParser () Quasihexpr Atom (Quasihexpr Atom)
+xons = do
+    (loc, xs) <- tokWithPos $ do
         char '{'
         disableIndentation $ do
-            xs <- namedField `sepEndBy` comma
+            xs <- try (tokenize parseBareHexpr) `sepEndBy` comma
             tokenize $ char '}'
             return xs
-    where
-    namedField = tokenize $ do
-        n <- intern <$> (char ':' >> bareName)
-        e <- tokenize parseBareHexpr
-        return (n, e)
+    return $ if null xs
+        then individual (Builtin loc Xil)
+        else individual (Builtin loc Xons) `adjoinsl` xs
 
-strExpr :: HexprParser () RawEL Atom (RawEL Atom)
+strExpr :: HexprParser () Quasihexpr Atom (Quasihexpr Atom)
 strExpr = do
-        (loc, _) <- tokWithPos (char '\"')
-        x0 <- strSegment
+        (loc, x0) <- tokWithPos (char '\"' >> strSegment)
         open
         xs <- disableIndentation $ go []
-        return $ StrInterp loc x0 xs
+        return $ individual (Builtin loc StrInterp) `adjoinsl` (x0:xs)
     where
     go acc = do
         e <- parseBareHexpr
         char ')'
         str <- strSegment
-        let acc' = (e,str):acc
-        (open >> go acc') <|> (char '\"' >> (return . reverse) acc')
+        let acc' = if empty str then [e]:acc else [e,str]:acc
+        (open >> go acc') <|> (char '\"' >> (return . concat . reverse) acc')
     open = try $ string "\\("
-    strSegment = pack . catMaybes <$> many (try stringLiteralChar)
+    strSegment = do
+        loc <- Loc <$> getPosition
+        s <- pack . catMaybes <$> many (try stringLiteralChar)
+        return $ individual (StrLit loc s)
+    empty (QLeaf (StrLit _ s)) = T.null s
+    empty _ = False
 
-dotExpr :: HexprParser () RawEL Atom (RawEL Atom)
-dotExpr = uncurry Dot <$> tokWithPos (char '.' >> parseHexpr )
+dotExpr :: HexprParser () Quasihexpr Atom (Quasihexpr Atom)
+dotExpr = do
+    (loc, e) <- tokWithPos (char '.' >> parseHexpr )
+    return $ individual (Builtin loc InfixDot) `adjoin` e
 
-quote :: HexprParser () RawEL Atom (RawEL Atom)
-quote = uncurry Code <$> tokWithPos (char '\'' >> disableQuasiquotation parseHexpr)
+quote :: HexprParser () Quasihexpr Atom (Quasihexpr Atom)
+quote = do
+    (loc, e) <- tokWithPos (char '\'' >> disableQuasiquotation parseHexpr)
+    return $ individual (Builtin loc Quote) `adjoin` e
 
-quasiquote :: HexprParser () RawEL Atom (RawEL Atom)
-quasiquote = uncurry Quasiquote <$> tokWithPos (char '⌜' >> withQuasiquote parseHexpr)
+quasiquote :: HexprParser () Quasihexpr Atom (Quasihexpr Atom)
+quasiquote = Quasiquote . snd <$> tokWithPos (char '⌜' >> withQuasiquote parseHexpr)
 
-unquote :: HexprParser () RawEL Atom (RawEL Atom)
-unquote = uncurry Unquote <$> tokWithPos (char '⌞' >> withUnquote parseHexpr)
+unquote :: HexprParser () Quasihexpr Atom (Quasihexpr Atom)
+unquote = Unquote . snd <$> tokWithPos (char '⌞' >> withUnquote parseHexpr)
 
-unquoteSplicing :: HexprParser () RawEL Atom (RawEL Atom)
-unquoteSplicing = uncurry Splice <$> tokWithPos (char '⌟' >> withUnquote parseHexpr)
+unquoteSplicing :: HexprParser () Quasihexpr Atom (Quasihexpr Atom)
+unquoteSplicing = Splice . snd <$> tokWithPos (char '⌟' >> withUnquote parseHexpr)
 
 
 bareName = parseIdentifier car cdr
     where
     car = codingChar (flip elem restrictCar)
     cdr = codingChar (flip elem restrict)
-    restrict = "\"\\#.,()[]{}⌜⌞⌟"
-    restrictCar = restrict ++ "\'0123456789:"
+    restrict = "\"\\#.,()[]{}⌜⌞⌟:"
+    restrictCar = restrict ++ "\'0123456789"
+
+bareField = (Left <$> naturalBase 10) <|> (Right . intern <$> bareName)
 
 tokWithPos parser = tokenize $ do
     pos <- getPosition

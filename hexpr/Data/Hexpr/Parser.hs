@@ -263,7 +263,7 @@ signLiteral = option 1 $ (char '-' >> return (-1)) <|> (char '+' >> return 1)
 -}
 naturalLiteral :: (Monad m) => HexprParserT u h a m (Integer, Integer)
 naturalLiteral = choice [ baseInt 16 "xX" hexDigit
-                        , baseInt 8  "xX" octDigit
+                        , baseInt 8  "oO" octDigit
                         , baseInt 2  "bB" (oneOf "01")
                         , decInt
                         ]
@@ -282,7 +282,7 @@ naturalLiteral = choice [ baseInt 16 "xX" hexDigit
 -}
 naturalBase :: (Monad m) => Integer -> HexprParserT u h a m Integer
 naturalBase  2 = stringToInteger  2 <$> many1 (oneOf "01")
-naturalBase  8 = stringToInteger 8  <$> many1 octDigit
+naturalBase  8 = stringToInteger  8 <$> many1 octDigit
 naturalBase 10 = stringToInteger 10 <$> many1 digit
 naturalBase 16 = stringToInteger 16 <$> many1 hexDigit
 naturalBase _ = error "naturalBase: unrecognized base (expecting 2, 8, 10 or 16)"

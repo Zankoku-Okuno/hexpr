@@ -4,13 +4,14 @@ module Language.EtaLisp.BasicTypes (
     , module Data.List
     , Text, pack, unpack
     , module Data.Symbol
+    , module Data.Hexpr
     , (<$>), (<*>), (<*), (*>), (<|>)
     , module Control.Monad
     , Loc(..)
     , Atom(..)
     , HNum(..)
     , Keyword(..)
-    , RawEL(..)
+    , Builtin(..)
     ) where
 
 import Data.Ratio
@@ -23,8 +24,9 @@ import Control.Monad
 
 import Text.Parsec (SourcePos)
 import Data.Hierarchy
+import Data.Hexpr
 
-
+type FiniteTypeIndex = Either Integer Symbol
 data Loc = Loc SourcePos
          | Implicit
 
@@ -33,47 +35,20 @@ data Atom = UnitLit Loc
           | ChrLit  Loc Char
           | StrLit  Loc Text
           | Var     Loc Symbol
+          | FieldIs Loc FiniteTypeIndex 
+          | FieldAt Loc FiniteTypeIndex
           | Kw      Loc Keyword
+          | Builtin Loc Builtin
 data HNum = HNum Rational
           | Inf | NegZero | NegInf | NaN
 data Keyword = Lambda | Let | In
              | Def | Data | Macro
              | AnonPoint | EmptyPat
-
-data RawEL a = Atom a
-             | Apply [RawEL a]
-             | Dot Loc (RawEL a)
-             | List Loc [RawEL a]
-             | Xons Loc [(Symbol, RawEL a)]
-             | StrInterp Loc Text [(RawEL a, Text)]
-             | Code Loc (RawEL a)
-             | Quasiquote Loc (RawEL a)
-             | Unquote Loc (RawEL a)
-             | Splice Loc (RawEL a)
-
-
-instance Hierarchy RawEL where
-    individual = Atom
-    
-    conjoin (Apply as) (Apply bs) = Apply (as ++ bs)
-    conjoin a (Apply bs) = Apply (a:bs)
-    conjoin (Apply as) b = Apply (as++[b])
-    conjoin a b = Apply [a, b]
-
-    adjoinsl x [] = x
-    adjoinsl x xs = Apply (x:xs)
-
-instance Openable RawEL where
-    openAp (f, _) (Atom x) = Atom (f x)
-    openAp (_, f) (Apply xs) = Apply (f xs)
-    openAp f (Dot loc e) = Dot loc (f `openAp` e)
-    openAp f (List loc es) = List loc (map (openAp f) es)
-    openAp f (Xons loc es) = Xons loc (map (\(s,e) -> (s, f `openAp` e)) es)
-    openAp f (StrInterp loc x0 xs) = StrInterp loc x0 (map (\(e, x) -> (f `openAp` e, x)) xs)
-    openAp f (Code loc e) = Code loc (f `openAp` e)
-    openAp f (Quasiquote loc e) = Quasiquote loc (f `openAp` e)
-    openAp f (Unquote loc e) = Unquote loc (f `openAp` e)
-    openAp f (Splice loc e) = Splice loc (f `openAp` e)
+data Builtin = Quote
+             | Nil | List
+             | Xil | Xons
+             | InfixDot
+             | StrInterp
 
 
 instance Show Atom where
@@ -86,8 +61,13 @@ instance Show Atom where
     show (NumLit _ NaN) = "NaN"
     show (ChrLit _ c) = show c
     show (StrLit _ s) = show s
+    show (FieldIs _ (Left n)) = show n ++ ":"
+    show (FieldIs _ (Right s)) = unintern s ++ ":"
+    show (FieldAt _ (Left n)) = ':' : show n
+    show (FieldAt _ (Right s)) = ':' : unintern s
     show (Var _ sym) = unintern sym
     show (Kw _ kw) = show kw
+    show (Builtin _ bi) = '#' : show bi
 instance Show Keyword where
     show Lambda = "λ"
     show Let = "let"
@@ -97,18 +77,19 @@ instance Show Keyword where
     show Macro = "macro"
     show AnonPoint = "_"
     show EmptyPat = "□"
+instance Show Builtin where
+    show Quote = "quote"
+    show Nil = "nil"
+    show List = "list"
+    show Xil = "xil"
+    show Xons = "xons"
+    show InfixDot = "."
+    show StrInterp = "str"
 
-instance Show a => Show (RawEL a) where
-    show (Atom x) = show x
-    show (Apply xs) = "(" ++ intercalate " " (map show xs) ++ ")"
-    show (Dot _ e) = "." ++ show e
-    show (List _ xs) = "[" ++ intercalate ", " (map show xs) ++ "]"
-    show (Xons _ xs) = "{" ++ intercalate ", " (map showXonsPair xs) ++ "}"
-    show (StrInterp _ x0 xs) = "\"" ++ unpack x0 ++ concatMap showInterpPair xs ++ "\""
-    show (Code _ x) = '\'' : show x
-    show (Quasiquote _ x) = "⌜" ++ show x
-    show (Unquote _ x) = "⌞" ++ show x
-    show (Splice _ x) = "⌟" ++ show x
-showXonsPair (sym, val) = ":" ++ unintern sym ++ " " ++ show val
-showInterpPair (e@(Apply _), str) = "\\" ++ show e ++ unpack str
-showInterpPair (e, str) = "\\(" ++ show e ++ ")" ++ unpack str
+instance Show a => Show (Quasihexpr a) where
+    show (QLeaf x) = show x
+    show (QBranch xs) = "(" ++ intercalate " " (map show xs) ++ ")"
+    show (Quasiquote x) = "⌜" ++ show x
+    show (Unquote x) = "⌞" ++ show x
+    show (Splice x) = "⌟" ++ show x
+
