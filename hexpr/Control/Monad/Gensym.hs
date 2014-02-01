@@ -1,4 +1,14 @@
-{-# LANGUAGE MultiParamTypeClasses, FunctionalDependencies, FlexibleInstances #-}
+{-| Computations involving the generation of fresh symbols.
+    
+    The notion of what is a symbol is abstracted by the 'Gensym' class.
+    Then, we provide the 'SymbolGen' monad and 'SymbolGenT' monad transformer,
+    in which symbols may be generated.
+
+    Symbols are generated deterministically, but also without reference to any
+    other sources of symbols, such as the programmer's algorithms, user input or
+    other SymbolGen monads. Therefore, make sure the symbols you generate are
+    trivially distinct from all other sources of symbols.
+-}
 module Control.Monad.Gensym (
     -- * Generate Symbols
       Gensym(..)
@@ -8,7 +18,6 @@ module Control.Monad.Gensym (
     -- * Symbol Generator Monad Transformer
     , SymbolGenT
     , runSymbolGenT
-    , MonadSymbolGen(..)
     ) where
 
 import Control.Applicative
@@ -22,49 +31,38 @@ import qualified Data.Ref as Ref
 
 
 ------ Concepts ------
+{-| Class for types that can provide an infinite supply of distinct values. -}
 class Gensym s where
+    {-| The initial symbol generated. -}
     genzero :: s
+    {-| Given the last symbol generated, generate the next.
+        Must be distinct from all other symbols generated.
+    -}
     nextsym :: s -> s
 
-{- DRAGONS
-    I tried to generalize Gensym here, so that you could put a symbol in a namespace
-    However, what I have here need UndecidableInstances, which I didn't want, so
-    On the other hand, you can always do redundant namespaceing yourself.
-    When you need to display gensyms to a human, ther should be a simple algorithm (probably involving SymbolGen again)
-    that should be able to reduce the gensyms actually used to something minimal.
--}
---class GenGensym a t s | t -> a where
---  genzero' :: t s
---  nextsym' :: a -> t s -> s
 
---instance (Gensym s) => GenGensym () Identity s where
---  genzero' = Identity genzero
---  nextsym' qual base = nextsym (runIdentity base)
-
-class (Monad m) => MonadSymbolGen s m | m -> s where
-    gensym :: m s   
-
---class (Monad m) => MonadGenSymbolGen a s m | m -> a, m -> s where
---  gensym' :: a -> m s
-
---instance (Gensym s, Monad m) => MonadGenSymbolGen () s m where
---  gensym' = const gensym
-
-type SymbolGen s = SymbolGenT s Identity
+{-| Monad transformer adding the capability of generating fresh symbols. -}
 newtype SymbolGenT s m a = SymbolGenT { unSymbolGenT :: StateT s m a }
 
-
-instance (Gensym s, Monad m) => MonadSymbolGen s (SymbolGenT s m) where
-    gensym = SymbolGenT $ do
-        sym <- get
-        modify nextsym
-        return sym
-
+{-| Perform a computation involving generating fresh symbols. -}
 runSymbolGenT :: (Gensym s, Monad m) => SymbolGenT s m a -> m a
 runSymbolGenT = flip evalStateT genzero . unSymbolGenT
 
+{-| Synonym for SymbolGenT over Identity. -}
+type SymbolGen s = SymbolGenT s Identity
+
+{-| Synonym for @'runIdentity' . 'runSymbolGenT'@. -}
 runSymbolGen :: (Gensym s) => SymbolGen s a -> a
 runSymbolGen = runIdentity . runSymbolGenT
+
+{-| Generate a fresh symbol. Of course, this monad does not know
+    what other sources of symbols there are, so make sure your 'Gensym'
+    instance generates symbols distinct from all others. -}
+gensym :: (Gensym s, Monad m) => SymbolGenT s m s
+gensym = SymbolGenT $ do
+    sym <- get
+    modify nextsym
+    return sym
 
 
 ------- Basic Instances ------

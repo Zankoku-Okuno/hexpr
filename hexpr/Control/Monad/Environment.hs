@@ -1,3 +1,9 @@
+{-| We provide an implementation of environments, as well as a monad
+    for performing computations in mutable environments. See 'Env' for
+    the definition of environments that we are using here. See
+    'EnvironmentT' for details on what is available withing a mutable
+    environment computation.
+-}
 module Control.Monad.Environment (
       EnvironmentT
     , Env
@@ -53,7 +59,8 @@ data Env k v = Env (Bindings k v) (Maybe (Env k v))
 --FIXME I actually can merge Maps, so I may as well do it that way instead of using parents
 
 {-| Where 'Env' represents immutable (mathematical) environments, 'MEnv' represent mutable
-    environments. Mutable environments are useful for accumulating recursive bindings.
+    environments. Mutable environments can be useful for accumulating recursive bindings,
+    or for interpreting languages with mutable binding environments.
     
     The implementation of mutable cells (allocation, reading, writing) is abstracted by @m@. See
     @Data.Ref@ for more information.
@@ -62,13 +69,18 @@ data MEnv m k v = MEnv (Ref.T m (Bindings k v)) (Maybe (MEnv m k v))
 {-| Synonym for some key-value mapping. -}
 type Bindings k v = [(k, v)]
 
-{- Perform computations involving the manipulation of @MEnv m k v@ terms.
-
-    TODO talk about how there's a default and active environment
+{-| Perform computations involving the manipulation of @MEnv m k v@ terms.
+    
+    Within the monad, we track not only the active (current) environment, but we also
+    provide a default environment. The default environment is intended as a \"top-level\"
+    environment that is available when using 'freshEnv'. For environments that do not reference
+    the default environment, use 'emptyEnv'. 
 -}
 newtype EnvironmentT k v m a = E { unEnvT :: StateT (MEnv m k v) (ReaderT (Bindings k v) m) a }
 
+{-| Run the Environment monad with 'IORef's. -}
 type EnvironmentIO k v = EnvironmentT k v IO
+{-| Run the Environment monad with 'STRef's. -}
 type EnvironmentST s k v = EnvironmentT k v (ST s)
 
 type DefaultEnv k v = Bindings k v
@@ -86,6 +98,7 @@ newtype EnvState k v = EnvState { unState :: (DefaultEnv k v, ActiveEnv k v) }
 --evalEnvironment :: (Ref.C m) => Bindings k v -> EnvironmentT k v m a -> m a
 --evalEnvironment bindings = runIdentity . evalEnvironmentT bindings
 
+{-| Provided a bindings for a default environment, run an environment computation. -}
 evalEnvironmentT :: (Ref.C m) => Bindings k v -> EnvironmentT k v m a -> m a
 evalEnvironmentT xs (E action) = do
     env0 <- flip MEnv Nothing `liftM` Ref.new xs
@@ -150,43 +163,51 @@ closeEnv (MEnv cell parent) = do
     
 
 ------ Binding and Lookup ------
-{-| Lookup the value associated with the passed key in the current environment. See @MEnv@ for
-    more algorithm detail.
+{-| Lookup the value associated with the passed key in the current environment.
+    See 'Env', 'getActiveEnv'.
 -}
 find :: (Ref.C m, Eq k) => k -> EnvironmentT k v m (Maybe v)
 find k = getActiveEnv >>= \env -> findIn env k
 
-{-| Bind the key to the value in the current environment. See @MEnv@ for more algorithm detail.
+{-| Bind the key to the value in the current environment.
+    See 'Env', 'getActiveEnv'.
 -}
 bind :: (Ref.C m) => k -> v -> EnvironmentT k v m ()
 bind k v = getActiveEnv >>= \env -> bindIn env k v
 -- This is why I want something more like Murex: bind ≡ (bindIn _ k v) =<< getActiveEnv
 
-{-| Lookup the value associated with the passed key in the passed @MEnv@. See @MEnv@ for more detail
-    on the search semantics.
+{-| Lookup the value associated with the passed key in the passed 'MEnv'.
+    See 'Env' for more detail on the search semantics.
 
-    We have `findIn e k v === withEnv e (find k v)`, but the implementation of @findIn@ does less
-    bookkeeping internally.
+    We have @'findIn' e k v === 'withEnv' e ('find' k v)@, but the implementation
+    of 'findIn' does less bookkeeping internally.
 -}
 findIn :: (Ref.C m, Eq k) => MEnv m k v -> k -> EnvironmentT k v m (Maybe v)
 findIn env@(MEnv cell Nothing) k = findInLocally env k
-findIn env@(MEnv cell (Just parent)) k = flip maybe return <$> findIn parent k <*> findInLocally env k
+findIn env@(MEnv cell (Just parent)) k = do
+    result <- findInLocally env k
+    case result of
+        Just _ -> return result
+        Nothing -> findIn parent k
 
-{-| Bind a key to a value in the passed @MEnv@. See @MEnv@ for more detail on the search semantics.
+{-| Bind a key to a value in the passed 'MEnv'. See 'Env' for more detail on the search semantics.
 
-    We have `bindIn e k v === withEnv e (bind k v)`, but the implementation of @findIn@ does less
-    bookkeeping internally.
+    We have @'bindIn' e k v === 'withEnv' e ('bind' k v)@, but the implementation of 
+    'findIn' does less bookkeeping internally.
 -}
 bindIn :: (Ref.C m) => MEnv m k v -> k -> v -> EnvironmentT k v m ()
 bindIn (MEnv cell _) k v = liftHeap $ Ref.modify cell ((k, v):)
 
-{-| Equivalent to `findIn . extractLocal`, but it's more direct to define `findIn` in terms of this. -}
+{-| Equivalent to @'findIn' . 'extractLocal'@, but it's more direct
+    to define 'findIn' in terms of this. -}
 findInLocally :: (Ref.C m, Eq k) => MEnv m k v -> k -> EnvironmentT k v m (Maybe v)
 findInLocally (MEnv cell _) k = lookup k <$> liftHeap (Ref.read cell)
 
 
 ------ Current Environment Manipulation ------
-{-| Obtain a handle to the current environment. -}
+{-| Obtain a handle to the active (current) environment.
+    The active environment is used in 'find', 'bind' and 'localEnv'.
+-}
 getActiveEnv :: (Ref.C m) => EnvironmentT k v m (MEnv m k v)
 getActiveEnv = liftActiveEnv get
 
@@ -243,7 +264,6 @@ instance Monoid (Env k v) where
 --TODO monoid for MEnv
 
 
---FIXME I should only need `Functor m` constrainst here, similar for Applicative
 instance (Ref.C m) => Functor (EnvironmentT k v m) where
     fmap = liftM
 

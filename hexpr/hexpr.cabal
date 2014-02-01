@@ -56,6 +56,7 @@ library
                     Data.Hexpr.Parser,
                     Language.Desugar,
                     Language.Distfix,
+                    Control.Monad.Report,
                     Control.Monad.Gensym,
                     Control.Monad.Environment,
                     Data.FiniteType
