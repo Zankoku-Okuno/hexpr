@@ -30,7 +30,7 @@ type FiniteTypeIndex = Either Integer Symbol
 data Loc = Loc SourcePos
          | Implicit
 
-data Atom = UnitLit Loc
+data Atom = BoolLit Loc Bool
           | NumLit  Loc HNum
           | ChrLit  Loc Char
           | StrLit  Loc Text
@@ -52,9 +52,9 @@ data Builtin = Quote
 
 
 instance Show Atom where
-    show (UnitLit _) = "()"
+    show (BoolLit _ b) = if b then "true" else "false"
     show (NumLit _ (HNum n)) | denominator n == 1 = show (numerator n)
-                           | otherwise = show (numerator n) ++ '/' : show (denominator n)
+                             | otherwise = show (numerator n) ++ '/' : show (denominator n)
     show (NumLit _ Inf) = "∞"
     show (NumLit _ NegZero) = "-0"
     show (NumLit _ NegInf) = "-∞"

@@ -91,6 +91,8 @@ name :: HexprParser () Quasihexpr Atom Atom
 name = do
     (loc, sym) <- tokWithPos bareName
     return $ case sym of
+        "true"  -> BoolLit loc True
+        "false" -> BoolLit loc False
         "λ"     -> Kw loc Lambda
         "let"   -> Kw loc Let
         "in"    -> Kw loc In
@@ -99,8 +101,7 @@ name = do
         "macro" -> Kw loc Macro
         "_"     -> Kw loc AnonPoint
         "□"     -> Kw loc EmptyPat
-        --TODO more keywords?
-        _ -> Var loc (intern sym)
+        _       -> Var loc (intern sym)
     
 
 list :: HexprParser () Quasihexpr Atom (Quasihexpr Atom)
@@ -112,7 +113,7 @@ list = do
             tokenize $ char ']'
             return xs
     return $ if null xs
-        then individual (Builtin loc Nil)
+        then individual (Builtin loc List) `adjoin` individual (Builtin loc Nil)
         else individual (Builtin loc List) `adjoinsl` xs
 
 xons :: HexprParser () Quasihexpr Atom (Quasihexpr Atom)
@@ -124,7 +125,7 @@ xons = do
             tokenize $ char '}'
             return xs
     return $ if null xs
-        then individual (Builtin loc Xil)
+        then individual (Builtin loc Xons) `adjoin` individual (Builtin loc Xil)
         else individual (Builtin loc Xons) `adjoinsl` xs
 
 strExpr :: HexprParser () Quasihexpr Atom (Quasihexpr Atom)
@@ -173,7 +174,7 @@ bareName = parseIdentifier car cdr
     car = codingChar (flip elem restrictCar)
     cdr = codingChar (flip elem restrict)
     restrict = "\"\\#.,()[]{}⌜⌞⌟:"
-    restrictCar = restrict ++ "\'0123456789"
+    restrictCar = restrict ++ "\'0123456789-"
 
 bareField = (Left <$> naturalBase 10) <|> (Right . intern <$> bareName)
 
