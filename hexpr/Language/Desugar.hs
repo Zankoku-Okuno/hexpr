@@ -51,10 +51,10 @@ revTripBy p (onNo, onYes) xs = case break p (reverse xs) of
     (a b lambda x y z) ===> (a b (lambda x y z))
 @
 -}
-addParens :: (Openable h, Hierarchy h) => (h a -> Bool) -> h a -> h a
+addParens :: (Openable (h p), Hierarchy h p) => (h p a -> Bool) -> h p a -> h p a
 addParens p = openAp (id, tripBy p (id, onYes))
     where
-    onYes before x after = before ++ [x `adjoinsl` after]
+    onYes before x after = before ++ [x `adjoinslPos` after]
 
 {-| Add parenthesis around a found subnode and at most one following node.
     Associates to the right.
@@ -65,7 +65,7 @@ addParens p = openAp (id, tripBy p (id, onYes))
     (++ ++ x) ===> (++(++(x)))
 @
 -}
-addShortParens :: (Openable h, Hierarchy h) => (h a -> Bool) -> h a -> h a
+addShortParens :: (Openable (h p), Hierarchy h p) => (h p a -> Bool) -> h p a -> h p a
 addShortParens p = openAp (id, tripBy p (id, onYes))
     where
     onYes before x [] = before++[x]
@@ -75,7 +75,7 @@ addShortParens p = openAp (id, tripBy p (id, onYes))
         (cont, next:after) -> before ++ [deepen next (reverse (x:cont))] ++ after
         where
         deepen acc [] = acc
-        deepen acc (x:xs) = deepen (x `adjoin` acc) xs
+        deepen acc (x:xs) = deepen (x `adjoinPos` acc) xs
 
 
 {-| Desugar a left-associative infix. If there are no elements to either
@@ -86,12 +86,12 @@ addShortParens p = openAp (id, tripBy p (id, onYes))
     (a b + c d + e f) ===> (+ (+ (a b) (c d)) (e f))
 @
 -}
-leftInfix :: (Openable h, Hierarchy h) => (h a -> Bool) -> h a -> h a
+leftInfix :: (Openable (h p), Hierarchy h p) => (h p a -> Bool) -> h p a -> h p a
 leftInfix p = openAp (id, revTripBy p (id, onYes))
     where
     onYes [] x after = x:after
     onYes before x [] = before++[x]
-    onYes before x after = [x, leftInfix p (unsafeAdjoins before), unsafeAdjoins after]
+    onYes before x after = [x, leftInfix p (adjoinsPos before), adjoinsPos after]
 
 {-| Desugar a right-associative infix. If there are no elements to either
     side of the infix, there is no change.
@@ -101,12 +101,12 @@ leftInfix p = openAp (id, revTripBy p (id, onYes))
     (a b ** c d ** e f) ===> (** (a b) (** (c d) (e f)))
 @
 -}
-rightInfix :: (Openable h, Hierarchy h) => (h a -> Bool) -> h a -> h a
+rightInfix :: (Openable (h p), Hierarchy h p) => (h p a -> Bool) -> h p a -> h p a
 rightInfix p = openAp (id, tripBy p (id, onYes))
     where
     onYes [] x after = x:after
     onYes before x [] = before++[x]
-    onYes before x after = [x, unsafeAdjoins before, rightInfix p (unsafeAdjoins after)]
+    onYes before x after = [x, adjoinsPos before, rightInfix p (adjoinsPos after)]
 
 {-| Desugar a non-associative infix. If there are no elements to either
     side of the infix, or if multiple matching elements are present,
@@ -118,12 +118,12 @@ rightInfix p = openAp (id, tripBy p (id, onYes))
     (a b < c d < e f) ===> (a b < c d < e f)
 @
 -}
-nonInfix :: (Openable h, Hierarchy h) => (h a -> Bool) -> h a -> h a
+nonInfix :: (Openable (h p), Hierarchy h p) => (h p a -> Bool) -> h p a -> h p a
 nonInfix p = openAp (id, tripBy p (id, onYes))
     where
     onYes [] x after = x:after
     onYes before x [] = before++[x]
     onYes before x after = if tripBy p (const True, \_ _ _ -> False) after
                             then before ++ [x] ++ after
-                            else [x, unsafeAdjoins before, unsafeAdjoins after]
+                            else [x, adjoinsPos before, adjoinsPos after]
 

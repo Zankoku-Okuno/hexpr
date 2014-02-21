@@ -1,3 +1,4 @@
+{-# LANGUAGE MultiParamTypeClasses, FlexibleInstances #-}
 --TODO some sort of Homoiconic class, which can is required for Functor so that fmap can delve into code objects
 -- well, required for functor might be too strong, instead provide a some sort of hmap that can delve, but requires Functor and Homoiconic
 {-| Hexprs are a data structure for representing and storing first-class code objects in a
@@ -30,9 +31,6 @@ module Data.Hexpr (
     -- * Primary Data Structures
       Hexpr(..)
     , Quasihexpr(..)
-    -- ** Smart Constructors
-    , node
-    , quasinode
     -- * Translation
     , unQuasihexpr
     , simplifyHexpr
@@ -58,10 +56,12 @@ import Data.Hierarchy
     grouping structure.
     These restrictions on the number of children in a branch are not currently enforced by the
     type system, so several functions on hexprs are properly partial.
+
+    To aid in production-quality language implementation, we also attach a position to each node.
+    If position is unneeded, simply specialize to @()@.
 -}
-data Hexpr a = Leaf a
-             | Branch [Hexpr a]
-    deriving (Eq)
+data Hexpr p a = Leaf   p a
+               | Branch p [Hexpr p a]
 
 {-| A Quasihexpr extends 'Hexpr' with quasiquotation.
     
@@ -70,31 +70,12 @@ data Hexpr a = Leaf a
     (or zero) Unquote and Splice nodes, just so long as there is no other Quasiquote between.
     Again, this restriction is not enforced by the type system.
 -}
-data Quasihexpr a = QLeaf      a
-                  | QBranch    [Quasihexpr a]
-                  | Quasiquote (Quasihexpr a)
-                  | Unquote    (Quasihexpr a)
-                  | Splice     (Quasihexpr a)
-    deriving (Eq)
-
-
------- Data Manipulation ------
-{-| Turn a list of 'Hexpr's into a single one, avoiding trivial branches.
-    Of course, the only way to avoid a trivial branch in @node []@ is to reduce to @&#x22A5;@,
-    so avoid that.
--}
-node :: [Hexpr a] -> Hexpr a
-node [] = error "hexpr nodes must have at least one element"
-node [x] = x
-node xs = Branch xs
-
-{-| As 'node', but for quasishexpr.
-    Obviously, no 'Quasiquote', 'Unquote' or 'Splice' nodes can be returned.
--}
-quasinode :: [Quasihexpr a] -> Quasihexpr a
-quasinode [] = error "quasihexpr nodes must have at least one element"
-quasinode [x] = x
-quasinode xs = QBranch xs
+data Quasihexpr p a = QLeaf      p a
+                    | QBranch    p [Quasihexpr p a]
+                    | Quote      p (Quasihexpr p a)
+                    | Quasiquote p (Quasihexpr p a)
+                    | Unquote    p (Quasihexpr p a)
+                    | Splice     p (Quasihexpr p a)
 
 
 ------ Hexpr Transforms ------
@@ -155,47 +136,49 @@ class UnQuasihexpr a where
     interesting, but not helpful for understanding the results if you already understand
     quasiquotation.
 -}
-unQuasihexpr :: UnQuasihexpr a => Quasihexpr a -> Hexpr a
-unQuasihexpr = trans . impl . normalize
-    where
-    impl :: (UnQuasihexpr a) => Quasihexpr a -> Quasihexpr a
-    impl (QBranch xs)                = QBranch (impl <$> xs)
-    impl (Quasiquote (QLeaf x))      = QBranch [QLeaf quoteForm, QLeaf x]
-    impl (Quasiquote (QBranch xs))   = unquasiquoteBranch xs
-    impl (Quasiquote (Quasiquote x)) = pushQuote . pushQuote $ x
-    impl (Quasiquote (Unquote x))    = impl x
-    impl (Quasiquote (Splice x))     = impl x
-    impl x = x
-    trans :: Quasihexpr a -> Hexpr a
-    trans (QLeaf x)  = Leaf x
-    trans (QBranch xs) = Branch (map trans xs)
-    trans (Quasiquote _) = error "tried to translate quasiquote"
-    normalize :: Quasihexpr a -> Quasihexpr a
-    normalize a = case a of
-        QLeaf x      -> a
-        QBranch [x]  -> normalize x
-        QBranch xs   -> QBranch (map normalize xs)
-        Quasiquote x -> Quasiquote (normalize x)
-        Unquote x    -> Unquote (normalize x)
-        Splice x     -> Splice (normalize x)
-    unquasiquoteBranch xs = case groupBy splitSplices xs of
-            -- branches always contain at least two nodes
-            -- @groupBy splitSplices@ never puts splices together in a group
-            -- therefore, if xss is a singleton, it contains no splices
-            [xs] -> QBranch (QLeaf nodeForm : map pushQuote xs)
-            xss  -> QBranch (QLeaf concatForm : map createSpliceList xss)
-        where
-            --FIXME REFAC pattern matching from the case into the function def
-            splitSplices x y = case (x, y) of 
-                (Splice _, _) -> False
-                (_, Splice _) -> False
-                _ -> True
-            createSpliceList xs = if isSplice xs
-                then (let [x] = xs in pushQuote x)
-                else QBranch (QLeaf nodeForm : map pushQuote xs)
-            isSplice xs = case xs of { [Splice _] -> True; _ -> False }
-    pushQuote :: (UnQuasihexpr a) => Quasihexpr a -> Quasihexpr a
-    pushQuote = impl . Quasiquote
+unQuasihexpr :: UnQuasihexpr a => Quasihexpr p a -> Hexpr p a
+unQuasihexpr = error "TODO"
+    --trans . impl . normalize
+    --where
+    --impl :: (UnQuasihexpr a) => Quasihexpr p a -> Quasihexpr p a
+    --impl (QBranch p xs)                  = QBranch p (impl <$> xs)
+    --impl (Quasiquote q (QLeaf p x))      = QBranch p [QLeaf p quoteForm, QLeaf p x]
+    --impl (Quasiquote q (QBranch p xs))   = unquasiquoteBranch xs
+    --impl (Quasiquote q (Quasiquote p x)) = pushQuote q . pushQuote q $ x
+    --impl (Quasiquote q (Unquote p x))    = impl x
+    --impl (Quasiquote q (Splice p x))     = impl x
+    --impl x = x
+    --trans :: Quasihexpr p a -> Hexpr p a
+    --trans (QLeaf x)  = Leaf x
+    --trans (QBranch xs) = Branch (map trans xs)
+    --trans (Quasiquote _) = error "tried to translate quasiquote"
+    --normalize :: Quasihexpr p a -> Quasihexpr p a
+    --normalize a = case a of
+    --    QLeaf p x      -> a
+    --    QBranch p [x]  -> normalize x
+    --    QBranch p xs   -> QBranch p (map normalize xs)
+    --    Quote p x      -> QBranch p [QLeaf p quoteForm, x]
+    --    Quasiquote p x -> Quasiquote p (normalize x)
+    --    Unquote p x    -> Unquote p (normalize x)
+    --    Splice p x     -> Splice p (normalize x)
+    --unquasiquoteBranch xs = case groupBy splitSplices xs of
+    --        -- branches always contain at least two nodes
+    --        -- @groupBy splitSplices@ never puts splices together in a group
+    --        -- therefore, if xss is a singleton, it contains no splices
+    --        [xs] -> QBranch (QLeaf nodeForm : map pushQuote xs)
+    --        xss  -> QBranch (QLeaf concatForm : map createSpliceList xss)
+    --    where
+    --        --FIXME REFAC pattern matching from the case into the function def
+    --        splitSplices x y = case (x, y) of 
+    --            (Splice _, _) -> False
+    --            (_, Splice _) -> False
+    --            _ -> True
+    --        createSpliceList xs = if isSplice xs
+    --            then (let [x] = xs in pushQuote x)
+    --            else QBranch (QLeaf nodeForm : map pushQuote xs)
+    --        isSplice xs = case xs of { [Splice _ _] -> True; _ -> False }
+    --pushQuote :: (UnQuasihexpr a) => p -> Quasihexpr p a -> Quasihexpr p a
+    --pushQuote p = impl . Quasiquote p
 
 --FIXME I can generalize this to: class ?Homoiconic? f where {toAtom :: f a -> a; fromAtom :: a -> Maybe (f a)}
 {-| Implement this class to allow simplification of some hexprs generated by @unQuasiSpine@. See
@@ -214,13 +197,13 @@ class (Eq a, UnQuasihexpr a) => SimplifyHexpr a where
     {-| Whether an atom is a code atom. -}
     isCode   :: a -> Bool
     {-| Create a code atom from a 'Hexpr'. -}
-    toCode   :: Hexpr a -> a
+    toCode   :: Hexpr p a -> a
     {-| Extract the 'Hexpr' from a code atom.
 
         This method need only be total over the refinement type @{x :: a | 'isCode' x}@, not the
         plain type @a@.
     -}
-    fromCode :: a -> Hexpr a
+    fromCode :: p -> a -> Hexpr p a
 
 {-| The @unQuasihexpr@ algorithm usually produces hexprs that are more complex than is necessary.
     This function factors @quoteForm@s, @nodeForm@s and @concatForm@s to eliminate redundancy.
@@ -250,75 +233,100 @@ class (Eq a, UnQuasihexpr a) => SimplifyHexpr a where
     * Any immediate siblings of nodeForm-lead branches are pushed into the nodeForm just so long as
         the parent is not a concatForm-lead branch.
 -}
-simplifyHexpr :: SimplifyHexpr a => Hexpr a -> Hexpr a
-simplifyHexpr x = case x of
-        Leaf x         -> Leaf x
-        Branch (x:[])  -> simplifyHexpr x
-        Branch (q:[x]) | q == Leaf quoteForm -> toCode' $ simplifyHexpr x
-        Branch (n:xs)  | n == Leaf nodeForm  ->
-                        let xs' = simplifyHexpr <$> xs
-                        in if isCode' `all` xs'
-                           then toCode' . simplifyHexpr . Branch $ fromCode' <$> xs'
-                           else n `conjoin` Branch xs'
-        Branch (c:xs)  | c == Leaf concatForm ->
-                        let xs' = simplifyHexpr <$> xs
-                        in if isCode' `all` xs'
-                           then toCode' $ conjoins (fromCode' <$> xs')
-                           else c `conjoin` Branch xs'
-        Branch xs      -> Branch (simplifyHexpr <$> xs)
-    where
-    isCode' (Leaf x) = isCode x
-    isCode' _ = False
-    toCode' = Leaf . toCode
-    fromCode' (Leaf x) = fromCode x
+simplifyHexpr :: SimplifyHexpr a => Hexpr p a -> Hexpr p a
+simplifyHexpr x = error "TODO"
+    --case x of
+    --    Leaf p x         -> Leaf p x
+    --    Branch p (x:[])  -> simplifyHexpr x
+    --    Branch p (q:[x]) | q == Leaf quoteForm -> toCode' $ simplifyHexpr x
+    --    Branch p (n:xs)  | n == Leaf nodeForm  ->
+    --                        let xs' = simplifyHexpr <$> xs
+    --                        in if isCode' `all` xs'
+    --                           then toCode' . simplifyHexpr . Branch p $ fromCode' <$> xs'
+    --                           else conjoin p n (Branch xs')
+    --    Branch p (c:xs)  | c == Leaf concatForm ->
+    --                        let xs' = simplifyHexpr <$> xs
+    --                        in if isCode' `all` xs'
+    --                           then toCode' $ conjoins (fromCode' <$> xs')
+    --                           else conjoin p c (Branch xs')
+    --    Branch p xs      -> Branch p (simplifyHexpr <$> xs)
+    --where
+    --isCode' (Leaf p x) = isCode x
+    --isCode' _ = False
+    --toCode' = Leaf . toCode
+    --fromCode' (Leaf p x) = fromCode x
 
 ------ Instances ------
+instance Eq a => Eq (Hexpr p a) where
+    (Leaf _ x) == (Leaf _ y) = x == y
+    (Branch _ xs) == (Branch _ ys) = xs == ys
+    _ == _ = False
+instance Eq a => Eq (Quasihexpr p a) where
+    (QLeaf _ x) == (QLeaf _ y) = x == y
+    (QBranch _ xs) == (QBranch _ ys) = xs == ys
+    (Quote _ x) == (Quote _ y) = x == y
+    (Quasiquote _ x) == (Quasiquote _ y) = x == y
+    (Unquote _ x) == (Unquote _ y) = x == y
+    (Splice _ x) == (Splice _ y) = x == y
+    _ == _ = False
+
 --TODO this won't work if there's internal structure in the Leaves
 --perhaps if I use `toCode :: Hexpr a -> Hexpr a`, then we needn't worry about internal structure so much`
-instance Functor Hexpr where
-    fmap f (Leaf x) = Leaf (f x)
-    fmap f (Branch xs) = Branch $ (map . fmap) f xs
+instance Functor (Hexpr p) where
+    fmap f (Leaf p x) = Leaf p (f x)
+    fmap f (Branch p xs) = Branch p $ (map . fmap) f xs
 
-instance Functor Quasihexpr where
-    fmap f (QLeaf x) = QLeaf (f x)
-    fmap f (QBranch xs) = QBranch $ (map . fmap) f xs
-    fmap f (Quasiquote x) = Quasiquote (fmap f x)
-    fmap f (Unquote x) = Unquote (fmap f x)
-    fmap f (Splice x) = Splice (fmap f x)
+instance Functor (Quasihexpr p) where
+    fmap f (QLeaf p x) = QLeaf p (f x)
+    fmap f (QBranch p xs) = QBranch p $ (map . fmap) f xs
+    fmap f (Quote p x) = Quote p (fmap f x)
+    fmap f (Quasiquote p x) = Quasiquote p (fmap f x)
+    fmap f (Unquote p x) = Unquote p (fmap f x)
+    fmap f (Splice p x) = Splice p (fmap f x)
 
-instance Hierarchy Hexpr where
+instance Hierarchy Hexpr p where
+    getPos (Leaf p _) = p
+    getPos (Branch p _) = p
+
     individual = Leaf
     
-    conjoin a@(Leaf _) b@(Leaf _)   = Branch $ [a] ++ [b]
-    conjoin a@(Leaf _) (Branch bs)  = Branch $ [a] ++ bs
-    conjoin (Branch as) b@(Leaf _)  = Branch $ as  ++ [b]
-    conjoin (Branch as) (Branch bs) = Branch $ as  ++ bs
+    conjoin p (Branch _ as) (Branch _ bs) = Branch p $ as  ++ bs
+    conjoin p (Branch _ as) b             = Branch p $ as  ++ [b]
+    conjoin p a             (Branch _ bs) = Branch p $ [a] ++ bs
+    conjoin p a             b             = Branch p $ [a] ++ [b]
 
-    adjoinsl x [] = x
-    adjoinsl x xs = Branch (x:xs)
+    adjoinsl p x [] = x
+    adjoinsl p x xs = Branch p (x:xs)
 
-instance Hierarchy Quasihexpr where
+instance Hierarchy Quasihexpr p where
+    getPos (QLeaf p _) = p
+    getPos (QBranch p _) = p
+    getPos (Quote p _) = p
+    getPos (Quasiquote p _) = p
+    getPos (Unquote p _) = p
+    getPos (Splice p _) = p
+
     individual = QLeaf
     
-    conjoin (QBranch as) (QBranch bs) = QBranch $ as  ++ bs
-    conjoin (QBranch as) b            = QBranch $ as  ++ [b]
-    conjoin a            (QBranch bs) = QBranch $ [a] ++ bs
-    conjoin a            b            = QBranch $ [a] ++ [b]
+    conjoin p (QBranch _ as) (QBranch _ bs) = QBranch p $ as  ++ bs
+    conjoin p (QBranch _ as) b              = QBranch p $ as  ++ [b]
+    conjoin p a              (QBranch _ bs) = QBranch p $ [a] ++ bs
+    conjoin p a              b              = QBranch p $ [a] ++ [b]
 
-    adjoinsl x [] = x
-    adjoinsl x xs = QBranch (x:xs)
+    adjoinsl p x [] = x
+    adjoinsl p x xs = QBranch p (x:xs)
 
-instance Openable Hexpr where
-    openAp (f, _) (Leaf x) = Leaf (f x)
-    openAp (_, f) (Branch xs) = node (f xs)
+instance Openable (Hexpr p) where
+    openAp (f, _) (Leaf p x) = Leaf p (f x)
+    openAp (_, f) (Branch p xs) = adjoins p (f xs)
 
-instance Openable Quasihexpr where
-    openAp (f, _) (QLeaf x) = QLeaf (f x)
-    openAp (_, f) (QBranch xs) = quasinode (f xs)
-    openAp fs (Quasiquote x) = Quasiquote (openAp fs x)
-    openAp fs (Unquote x) = Unquote (openAp fs x)
-    openAp fs (Splice x) = Splice (openAp fs x)
+instance Openable (Quasihexpr p) where
+    openAp (f, _) (QLeaf p x) = QLeaf p (f x)
+    openAp (_, f) (QBranch p xs) = adjoins p (f xs)
+    openAp fs (Quasiquote p x) = Quasiquote p (openAp fs x)
+    openAp fs (Unquote p x) = Unquote p (openAp fs x)
+    openAp fs (Splice p x) = Splice p (openAp fs x)
 
--- | because I'm willing to be unsafe here, just don't export
-conjoins xs = head xs `conjoinsl` tail xs
+
+
 

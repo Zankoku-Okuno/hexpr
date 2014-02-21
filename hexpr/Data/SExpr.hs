@@ -1,3 +1,4 @@
+{-# LANGUAGE MultiParamTypeClasses, FlexibleInstances #-}
 module Data.Sexpr (
       Sexpr(..)
     , SexprToHexpr(..)
@@ -8,36 +9,39 @@ import Data.Hierarchy
 import Data.Hexpr
 
 
-data Sexpr a = Atom a | Sexpr [Sexpr a]
+data Sexpr p a = Atom p a | Sexpr p [Sexpr p a]
 
-instance Hierarchy Sexpr where
+instance Hierarchy Sexpr p where
+    getPos (Atom p _) = p
+    getPos (Sexpr p _) = p
+
     individual = Atom
 
-    conjoin (Sexpr as) (Sexpr bs) = Sexpr (as++bs)
-    conjoin a (Sexpr bs) = Sexpr (a:bs)
-    conjoin (Sexpr as) b = Sexpr (as++[b])
-    conjoin a b = Sexpr [a, b]
+    conjoin p (Sexpr _ as) (Sexpr _ bs) = Sexpr p (as++bs)
+    conjoin p a (Sexpr _ bs) = Sexpr p (a:bs)
+    conjoin p (Sexpr _ as) b = Sexpr p (as++[b])
+    conjoin p a b = Sexpr p [a, b]
 
-    adjoinsl x xs = Sexpr (x:xs)
+    adjoinsl p x xs = Sexpr p (x:xs)
 
-    unsafeAdjoins = Sexpr
+    adjoins = Sexpr
 
-instance Openable Sexpr where
-    openAp (f, _) (Atom x) = Atom (f x)
-    openAp (_, f) (Sexpr xs) = Sexpr (f xs)
+instance Openable (Sexpr p) where
+    openAp (f, _) (Atom p x) = Atom p (f x)
+    openAp (_, f) (Sexpr p xs) = Sexpr p (f xs)
 
 
 class SexprToHexpr a where
-    xformNull :: Hexpr a
+    xformNull :: p -> Hexpr p a
     xformNull = error "Empty sexprs are disallowed"
-    xformSingleton :: Sexpr a -> Hexpr a
+    xformSingleton :: Sexpr p a -> Hexpr p a
 
     xformDeepAtom :: a -> a
     xformDeepAtom = id
 
-sexprToHexpr :: (SexprToHexpr a) => Sexpr a -> Hexpr a
-sexprToHexpr (Atom x) = Leaf (xformDeepAtom x)
-sexprToHexpr (Sexpr []) = xformNull
-sexprToHexpr (Sexpr [x]) = xformSingleton x
-sexprToHexpr (Sexpr xs) = Branch (map sexprToHexpr xs)
+sexprToHexpr :: (SexprToHexpr a) => Sexpr p a -> Hexpr p a
+sexprToHexpr (Atom p x) = Leaf p (xformDeepAtom x)
+sexprToHexpr (Sexpr p []) = xformNull p
+sexprToHexpr (Sexpr p [x]) = xformSingleton x
+sexprToHexpr (Sexpr p xs) = Branch p (map sexprToHexpr xs)
 

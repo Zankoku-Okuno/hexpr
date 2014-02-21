@@ -12,6 +12,7 @@
 module Control.Monad.Gensym (
     -- * Generate Symbols
       Gensym(..)
+    , gensym
     -- * Symbol Generator Monad
     , SymbolGen
     , runSymbolGen

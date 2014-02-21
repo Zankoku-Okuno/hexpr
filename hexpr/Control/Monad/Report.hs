@@ -11,45 +11,55 @@ module Control.Monad.Report (
     , reportWithin
     ) where
 
+import Data.Maybe
 import Data.Either
 import Control.Applicative
 import Control.Monad
 import Control.Monad.Identity
+import Control.Monad.Trans.Maybe
 import Control.Monad.Writer
 import Control.Monad.Trans
 
 
 {-| Computations that can report multiple warnings and errors. -}
-newtype ReportT e w m a = ReportT { unReport :: WriterT [Either w e] m a }
+newtype ReportT e w m a = ReportT { unReport :: MaybeT (WriterT [Either w e] m) a }
 
 {-| Run a computation that can report multiple warnings and errors. -}
 runReportT :: (Monad m) => ReportT e w m a -> m ([w], Either [e] a)
 runReportT (ReportT action) = do
-    (result, acc) <- runWriterT action
-    let (warnings, errors) = partitionEithers acc
-    return $ if null errors
-        then (warnings, Right result)
-        else (warnings, Left errors)
+    (mResult, report) <- runWriterT . runMaybeT $ action
+    let (warnings, errors) = partitionEithers report
+    if null errors
+        then do
+            let result = fromJust mResult
+            return (warnings, Right result)
+        else return (warnings, Left errors)
 
 {-| Log a warning. -}
 warn :: (Monad m) => w -> ReportT e w m ()
 warn x = ReportT $ tell [Left x]
 
 {-| Log an error. -}
-err :: (Monad m) => e -> ReportT e w m ()
-err x = ReportT $ tell [Right x]
+err :: (Monad m) => e -> ReportT e w m a
+err x = ReportT (tell [Right x]) >> fail ""
 
 {-| Gather the warnings and errors from a sub-report.
     The sub-report is logged in the main report as well.
 -}
-reportWithin :: (Monad m) => ReportT e w m a -> ReportT e w m (a, ([w], [e]))
+reportWithin :: (Monad m) => ReportT e w m a -> ReportT e w m ([w], Either [e] a)
 reportWithin (ReportT action) = do
-    result@(_, (warnings, errors)) <- lift $ do
-        (result, acc) <- runWriterT action
-        return (result, partitionEithers acc)
+    (mResult, warnings, errors) <- lift $ do
+        (res, acc) <- runWriterT . runMaybeT $ action
+        let (warnings, errors) = partitionEithers acc
+        return (res, warnings, errors)
     mapM warn warnings
-    mapM err errors
-    return result
+    if null errors
+        then do
+            let result = fromJust mResult
+            return (warnings, Right result)
+        else do
+            mapM err errors
+            return (warnings, Left errors)
 
 {-| Synonym for report computations over 'Identity'. -}
 type Report e w = ReportT e w Identity
@@ -69,9 +79,10 @@ instance (Monad m) => Applicative (ReportT e w m) where
 instance (Monad m) => Monad (ReportT e w m) where
     return = ReportT . return
     x >>= k = ReportT $ unReport x >>= unReport . k
+    x >> k = reportWithin x >> k
 
 instance MonadTrans (ReportT e w) where
-    lift = ReportT . lift
+    lift = ReportT . lift . lift
 
 instance (MonadIO m) => MonadIO (ReportT e w m) where
     liftIO = lift . liftIO

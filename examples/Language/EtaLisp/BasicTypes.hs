@@ -4,6 +4,7 @@ module Language.EtaLisp.BasicTypes (
     , module Data.List
     , Text, pack, unpack
     , module Data.Symbol
+    , module Data.Hierarchy
     , module Data.Hexpr
     , (<$>), (<*>), (<*), (*>), (<|>)
     , module Control.Monad

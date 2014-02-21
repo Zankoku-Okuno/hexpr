@@ -1,3 +1,4 @@
+{-# LANGUAGE MultiParamTypeClasses #-}
 {-| The intuition behind a hierarchy is that individuals may form groups, and groups may form groups,
     but no group can have zero individuals under its umbrella.
 
@@ -16,10 +17,15 @@ module Data.Hierarchy (
       Hierarchy(..)
     , Openable(..)
     , OpenAp
+    , adjoinPos, adjoinslPos, adjoinsrPos, adjoinsPos 
+    , conjoinPos, conjoinslPos, conjoinsrPos, conjoinsPos 
     ) where
 
 {-| A hierarchy is a set, together with an associative operation and a non-associative operation,
     as well as a duality law, which we'll get to after introducing the notation.
+
+    Although we also provide for source positions, we will omit them for simplicity in this
+    description.
 
     Ideally, I'd call the associative operation @++@ or @\<\>@, but the cool infix operators are
     spoken for already, so I'll have to go with descriptive names.
@@ -52,55 +58,61 @@ module Data.Hierarchy (
     new two-element directory. Clearly, conjoin is commutative here. For generality, we have
     given default implemetations assuming non-commutativity in both operations.
 -}
-class Hierarchy h where
-    {-| Create a singleton hierarchy. -}
-    individual :: a -> h a
-    {-| Adjoin exactly two nodes in the same level.
-    @
-    (a `adjoin` b) `adjoin` c =/= a `adjoin` (b `adjoin` c)
-    @
-    -}
-    adjoin :: h a -> h a -> h a
-    adjoin a b = adjoinsl a [b]
+class Hierarchy h p where
+    getPos :: h p a -> p
 
-    {-| Adjoin many nodes in the same level. The first argument is leftmost. -}
-    adjoinsl :: h a -> [h a] -> h a
-
-    {-| Adjoin many nodes in the same level. The first argument is rightmost. -}
-    adjoinsr :: [h a] -> h a -> h a
-    adjoinsr [] a = a
-    adjoinsr (a:as) b = adjoinsl a (as++[b])
+    individual :: p -> a -> h p a
     
-    {-|
-    @
-    (a `conjoin` b) `conjoin` c === a `conjoin` (b `conjoin` c)
-    @
-    -}
-    conjoin :: h a -> h a -> h a
-    {-| Conjoin one or more hierarchies.
+    adjoin :: p -> h p a -> h p a -> h p a
+    adjoin pos a b = adjoinsl pos a [b]
 
-    @
-    conjoinsl a [x1, ..., xn] === a `conjoin` x1 `conjoin` ... `conjoin` xn
-    @
-    -}
-    conjoinsl :: h a -> [h a] -> h a
-    conjoinsl acc [] = acc
-    conjoinsl acc (x:xs) = (acc `conjoin` x) `conjoinsl` xs
-    {-| Conjoin one or more hierarchies.
+    adjoinsl :: p -> h p a -> [h p a] -> h p a
 
-    @
-    conjoinsr [x1, ..., xn] a === x1 `conjoin` ... `conjoin` xs `conjoin` a
-    @
-    -}
-    conjoinsr :: [h a] -> h a -> h a
-    conjoinsr [] base = base
-    conjoinsr (x:xs) base = (x `conjoinsl` xs) `conjoin` base
+    adjoinsr :: p -> [h p a] -> h p a -> h p a
+    adjoinsr pos [] a = a
+    adjoinsr pos (a:as) b = adjoinsl pos a (as++[b])
+    
+    adjoins :: p -> [h p a] -> h p a
+    adjoins pos [] = error "Cannot construct hierarchy of zero elements."
+    adjoins pos (x:xs) = adjoinsl pos x xs
+    
+    conjoin :: p -> h p a -> h p a -> h p a
+    
+    conjoinsl :: p -> h p a -> [h p a] -> h p a
+    conjoinsl pos acc [] = acc
+    conjoinsl pos acc (x:xs) = conjoinsl pos (conjoin pos acc x) xs
+    
+    conjoinsr :: p -> [h p a] -> h p a -> h p a
+    conjoinsr pos [] base = base
+    conjoinsr pos (x:xs) base = conjoin pos (conjoinsl pos x xs) base
 
-    {-| Package a non-empty list into a hierarchy. Fail on empty input. -}
-    unsafeAdjoins :: (Hierarchy h) => [h a] -> h a
-    unsafeAdjoins [] = error "Cannot construct hierarchy of zero elements."
-    unsafeAdjoins [x] = x
-    unsafeAdjoins (x:xs) = x `adjoinsl` xs
+    conjoins :: p -> [h p a] -> h p a
+    conjoins pos [] = error "Cannot construct hierarchy of zero elements."
+    conjoins pos (x:xs) = conjoinsl pos x xs
+
+
+adjoinPos :: (Hierarchy h p) => h p a -> h p a -> h p a
+adjoinPos x y = adjoin (getPos x) x y
+adjoinslPos :: (Hierarchy h p) => h p a -> [h p a] -> h p a
+adjoinslPos x [] = x
+adjoinslPos x ys = adjoinsl (getPos x) x ys
+adjoinsrPos :: (Hierarchy h p) => [h p a] -> h p a -> h p a
+adjoinsrPos [] x = x
+adjoinsrPos xs y = adjoinsr (getPos $ head xs) xs y
+adjoinsPos :: (Hierarchy h p) => [h p a] -> h p a
+adjoinsPos [] = error "Cannot construct hierarchy of zero elements."
+adjoinsPos (x:xs) = adjoinslPos x xs
+conjoinPos :: (Hierarchy h p) => h p a -> h p a -> h p a
+conjoinPos x y = conjoin (getPos x) x y
+conjoinslPos :: (Hierarchy h p) => h p a -> [h p a] -> h p a
+conjoinslPos acc [] = acc
+conjoinslPos acc (x:xs) = (acc `conjoinPos` x) `conjoinslPos` xs
+conjoinsrPos :: (Hierarchy h p) => [h p a] -> h p a -> h p a
+conjoinsrPos [] base = base
+conjoinsrPos (x:xs) base = (x `conjoinslPos` xs) `conjoinPos` base
+conjoinsPos :: (Hierarchy h p) => [h p a] -> h p a
+conjoinsPos [] = error "Cannot construct hierarchy of zero elements."
+conjoinsPos (x:xs) = conjoinslPos x xs
 
 
 {-| It is often useful to look at the elements of a node in a 'Hierarchy', perform

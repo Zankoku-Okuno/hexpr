@@ -175,6 +175,8 @@ data Distfix a = Distfix ([a] -> a) Shape [a]
     documentation might better present the reasoning involved.
 -}
 data Shape = Closed | HalfOpenRight | HalfOpenLeft | OpenRight | OpenLeft | OpenNon
+    deriving (Eq)
+
 {-| A list, in descending order of precedence (ascending of binding tightness) of groups of
     Distfixes.
 

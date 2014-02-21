@@ -11,6 +11,7 @@ import Control.Monad.Trans.Either
 
 import Language.EtaLisp.BasicTypes
 import Language.EtaLisp.Parser
+import Language.EtaLisp.Desugar
 
 run :: FilePath -> IO (Either String ())
 run filepath = runEitherT $ do
@@ -18,4 +19,9 @@ run filepath = runEitherT $ do
     raw <- case parse filepath content of
         Left err -> left $ show err
         Right val -> return val
+    --(notation, body) <- case extractNotations raw of
+    --	Left err -> left $ show "TODO: notationconfig errs"
+    --	Right val -> return val
+    return $ parseOp "_+_"
     void . liftIO $ mapM print raw
+    --void . liftIO $ mapM print body

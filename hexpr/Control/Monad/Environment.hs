@@ -26,11 +26,13 @@ module Control.Monad.Environment (
     , findIn
     , bindIn
 
-    , getActiveEnv
+    , getFindEnv
+    , getBindEnv
     , withEnv
     , emptyEnv
     , freshEnv
     , localEnv
+    , letInEnv
     ) where
 
 import qualified Data.Ref as Ref
@@ -76,7 +78,7 @@ type Bindings k v = [(k, v)]
     environment that is available when using 'freshEnv'. For environments that do not reference
     the default environment, use 'emptyEnv'. 
 -}
-newtype EnvironmentT k v m a = E { unEnvT :: StateT (MEnv m k v) (ReaderT (Bindings k v) m) a }
+newtype EnvironmentT k v m a = E { unEnvT :: StateT (MEnv m k v, MEnv m k v) (ReaderT (Bindings k v) m) a }
 
 {-| Run the Environment monad with 'IORef's. -}
 type EnvironmentIO k v = EnvironmentT k v IO
@@ -102,7 +104,7 @@ newtype EnvState k v = EnvState { unState :: (DefaultEnv k v, ActiveEnv k v) }
 evalEnvironmentT :: (Ref.C m) => Bindings k v -> EnvironmentT k v m a -> m a
 evalEnvironmentT xs (E action) = do
     env0 <- flip MEnv Nothing `liftM` Ref.new xs
-    runReaderT (evalStateT action env0) xs
+    runReaderT (evalStateT action (env0, env0)) xs
 
 --execEnvironment :: [(k, v)] -> EnvironmentT k v m a -> m (EnvState k v)
 --execEnvironment env action = liftM snd (runEnvironment env action)
@@ -164,17 +166,17 @@ closeEnv (MEnv cell parent) = do
 
 ------ Binding and Lookup ------
 {-| Lookup the value associated with the passed key in the current environment.
-    See 'Env', 'getActiveEnv'.
+    See 'Env', 'getFindEnv'.
 -}
 find :: (Ref.C m, Eq k) => k -> EnvironmentT k v m (Maybe v)
-find k = getActiveEnv >>= \env -> findIn env k
+find k = getFindEnv >>= \env -> findIn env k
 
 {-| Bind the key to the value in the current environment.
-    See 'Env', 'getActiveEnv'.
+    See 'Env', 'getFindEnv'.
 -}
 bind :: (Ref.C m) => k -> v -> EnvironmentT k v m ()
-bind k v = getActiveEnv >>= \env -> bindIn env k v
--- This is why I want something more like Murex: bind ≡ (bindIn _ k v) =<< getActiveEnv
+bind k v = getBindEnv >>= \env -> bindIn env k v
+-- This is why I want something more like Murex: bind ≡ (bindIn _ k v) =<< getFindEnv
 
 {-| Lookup the value associated with the passed key in the passed 'MEnv'.
     See 'Env' for more detail on the search semantics.
@@ -205,17 +207,21 @@ findInLocally (MEnv cell _) k = lookup k <$> liftHeap (Ref.read cell)
 
 
 ------ Current Environment Manipulation ------
-{-| Obtain a handle to the active (current) environment.
-    The active environment is used in 'find', 'bind' and 'localEnv'.
--}
-getActiveEnv :: (Ref.C m) => EnvironmentT k v m (MEnv m k v)
-getActiveEnv = liftActiveEnv get
+{-| Obtain a handle to the environment in which begin searches. -}
+getFindEnv :: (Ref.C m) => EnvironmentT k v m (MEnv m k v)
+getFindEnv = fst <$> liftActiveEnv get
+
+{-| Obtain a handle to the environment in which begin searches. -}
+getBindEnv :: (Ref.C m) => EnvironmentT k v m (MEnv m k v)
+getBindEnv = snd <$> liftActiveEnv get
 
 {-| Perform an action in the given environment. -}
 withEnv :: (Ref.C m) => MEnv m k v -> EnvironmentT k v m a -> EnvironmentT k v m a
 withEnv env' action = do
-    env <- getActiveEnv
-    liftActiveEnv (put env') >> action << liftActiveEnv (put env)
+    env <- liftActiveEnv get
+    liftActiveEnv (put (env', env')) >> action << liftActiveEnv (put env)
+
+--TODO withFindEnv, withBindEnv
 
 {-| Perform an action in a new, empty, parentless environment. -}
 emptyEnv :: (Ref.C m) => EnvironmentT k v m a -> EnvironmentT k v m a
@@ -233,8 +239,23 @@ freshEnv action = do
 {-| Perform an action in a new, initially empty environment, child to the current. -}
 localEnv :: (Ref.C m) => EnvironmentT k v m a -> EnvironmentT k v m a
 localEnv action = do
-    env' <- newEnv [] =<< liftM Just getActiveEnv
+    env' <- newEnv [] =<< liftM Just getFindEnv
     withEnv env' action
+
+{-| Perform the first action in a 'localEnv', then perform the second with the
+    binding environment the same as the original finding environment.
+-}
+letInEnv ::(Ref.C m) => EnvironmentT k v m a -> EnvironmentT k v m b -> EnvironmentT k v m b
+letInEnv letAction inAction = do
+    env0 <- liftActiveEnv get
+    env <- getFindEnv
+    env' <- newEnv [] (Just env)
+    liftActiveEnv $ put (env', env')
+    letAction
+    liftActiveEnv $ put (env', env)
+    res <- inAction
+    liftActiveEnv $ put env0
+    return res
 
 
 ------ Helpers ------
@@ -246,7 +267,7 @@ newEnv xs parent = do
     env <- liftHeap $ Ref.new xs
     return $ MEnv env parent
 
-liftActiveEnv :: (Ref.C m) => StateT (MEnv m k v) (ReaderT (Bindings k v) m) a -> EnvironmentT k v m a
+liftActiveEnv :: (Ref.C m) => StateT (MEnv m k v, MEnv m k v) (ReaderT (Bindings k v) m) a -> EnvironmentT k v m a
 liftActiveEnv = E
 liftDefaultEnv :: (Ref.C m) => ReaderT (Bindings k v) m a -> EnvironmentT k v m a
 liftDefaultEnv = E . lift

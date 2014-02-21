@@ -53,7 +53,6 @@ library
   exposed-modules:  Data.Hierarchy,
                     Data.Sexpr,
                     Data.Hexpr,
-                    Data.Hexpr.Parser,
                     Language.Desugar,
                     Language.Distfix,
                     Control.Monad.Report,
@@ -66,6 +65,7 @@ library
   
   -- Other library packages from which modules are imported.
   build-depends:    base ==4.6.*,
+                    transformers ==0.3.*,
                     mtl ==2.1.*,
                     either ==4.1.*,
                     parsec ==3.0.*,
