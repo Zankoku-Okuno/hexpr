@@ -33,9 +33,7 @@ module Data.Hexpr (
     , Quasihexpr(..)
     -- * Translation
     , unQuasihexpr
-    , simplifyHexpr
     , UnQuasihexpr(..)
-    , SimplifyHexpr(..)
     ) where
 
 import Data.List
@@ -79,147 +77,52 @@ data Quasihexpr p a = QLeaf      p a
 
 
 ------ Hexpr Transforms ------
-{-| Implement this class to allow quasihexprs to be transformed into hexprs by 'unQuasishexpr'.
-
-    The transformation will map 'Quasiquote', 'Unquote' and 'Splice' nodes into special 'Branches'
-    whose first element is is a /special form/. That is:
-
-    * the form is a leaf (already enforced by the type system),
-
-    * the semantics of the form should not depend on context,
-
-    * and when translating the hexpr into a richer syntax, the form will disappear in favor of the
-      form's siblings being enclosed in some specific type of grammatical node.
-
-    This sort of transformation should make it very easy to detect and handle the resulting
-    encoding in appropriately special ways should the need arise.
-
-        
-        [Node] create a node from any number of values, and
-        
-        [Concat] unwrap some input code objects, and construct a single code object from the parts.
--}
 class UnQuasihexpr a where
-    {-| Create a code literal from its (exactly one) sibling hexpr. -}
-    quoteForm  :: a
-    {-| A vararg function that creates a single hexpr node from some code values (at least one)
-        where the values are obtained by evaluating sibling hexprs.
+    {-| A node that, when evaluated, creates a single hexpr node from at least one code values.
 
-        That is, given @('nodeForm' \<e_1\> ... \<e_n\>)@ with @n >= 1@, then if each @e_i@
-        reduces to a code value @v_i@, then construct a code value equivalent to
+        For example, create the node @('nodeForm' \<e_1\> ... \<e_n\>)@ with @n >= 1@, such that
+        then if each @e_i@ reduces to a code value @v_i@, then the whole node evaluates to
         @('quoteForm' (\<v_1\> ... \<v_n\>))@.
     -}
-    nodeForm   :: a
+    mkNode :: p -> [Quasihexpr p a] -> Quasihexpr p a
+    {-| A vararg function that turns a number of values into a list during evaluation. -}
+    mkList :: p -> [Quasihexpr p a] -> Quasihexpr p a
     {-| A vararg function that concatenates lists of values into a single node where the lists are
         obtained by evaluating sibling nodes.
 
-        That is, given @('concatForm' \<e_1\> ... \<e_n\>)@ with @n >= 1@, then if each @e_i@
-        reduces to a code value @vs_i@, and each @vs_i@ is a list of code values, then construct a
-        code value equivalent to @('quoteForm' (\<vs_1\> ++ ... ++ \<vs_n\>))@.  
+        For example, create the node @('concatForm' \<e_1\> ... \<e_n\>)@ with @n >= 1@, such that
+        if each @e_i@ reduces to a list of code values @vs_i@, then the whole form evaluates to
+        @('quoteForm' (\<vs_1\> ++ ... ++ \<vs_n\>))@.  
     -}
-    concatForm :: a
+    mkConcat :: p -> [Quasihexpr p a] -> Quasihexpr p a
 
-{-| Transform a quasihexpr into a hexpr. When the input consists only of 'QLeaf' and 'QBranch'
-    nodes, the transformation is trivial. However, 'Quasiquote', 'Unquote' and 'Splice' need to
-    be specially encoded. See 'UnQuasihexpr' for more detail on the encoding used. Otherwise, we
-    use the following transformations:
+    isList :: Quasihexpr p a -> Bool
+    fromList :: Quasihexpr p a -> [Quasihexpr p a]
 
-    * A quasiquoted leaf is a the leaf wrapped in a 'quoteForm'.
+    removeQuotation :: Quasihexpr p a -> Hexpr p a
 
-    * For a quasiquoted branch, consecutive non-'Splice' nodes are wrapped in a 'nodeForm', and 
-      if there are any 'Splice' nodes in the branch, then all of these results are wrapped in a
-      'concatForm'.
+{-| FIXME stale documentation
 
-    * A quasiquoted unquote/splice node is simply the content of the node.
+    Transform a quasihexpr into a hexpr. When the input consists only of 'QLeaf' and 'QBranch'
+    nodes, the transformation is trivial. However, 'Quote', 'Quasiquote', 'Unquote' and 'Splice'
+    need to be specially encoded.
 
     Of course, appropriate recursion is also needed, but for that, see the source code. It's
     interesting, but not helpful for understanding the results if you already understand
     quasiquotation.
--}
-unQuasihexpr :: UnQuasihexpr a => Quasihexpr p a -> Hexpr p a
-unQuasihexpr = error "TODO"
-    --trans . impl . normalize
-    --where
-    --impl :: (UnQuasihexpr a) => Quasihexpr p a -> Quasihexpr p a
-    --impl (QBranch p xs)                  = QBranch p (impl <$> xs)
-    --impl (Quasiquote q (QLeaf p x))      = QBranch p [QLeaf p quoteForm, QLeaf p x]
-    --impl (Quasiquote q (QBranch p xs))   = unquasiquoteBranch xs
-    --impl (Quasiquote q (Quasiquote p x)) = pushQuote q . pushQuote q $ x
-    --impl (Quasiquote q (Unquote p x))    = impl x
-    --impl (Quasiquote q (Splice p x))     = impl x
-    --impl x = x
-    --trans :: Quasihexpr p a -> Hexpr p a
-    --trans (QLeaf x)  = Leaf x
-    --trans (QBranch xs) = Branch (map trans xs)
-    --trans (Quasiquote _) = error "tried to translate quasiquote"
-    --normalize :: Quasihexpr p a -> Quasihexpr p a
-    --normalize a = case a of
-    --    QLeaf p x      -> a
-    --    QBranch p [x]  -> normalize x
-    --    QBranch p xs   -> QBranch p (map normalize xs)
-    --    Quote p x      -> QBranch p [QLeaf p quoteForm, x]
-    --    Quasiquote p x -> Quasiquote p (normalize x)
-    --    Unquote p x    -> Unquote p (normalize x)
-    --    Splice p x     -> Splice p (normalize x)
-    --unquasiquoteBranch xs = case groupBy splitSplices xs of
-    --        -- branches always contain at least two nodes
-    --        -- @groupBy splitSplices@ never puts splices together in a group
-    --        -- therefore, if xss is a singleton, it contains no splices
-    --        [xs] -> QBranch (QLeaf nodeForm : map pushQuote xs)
-    --        xss  -> QBranch (QLeaf concatForm : map createSpliceList xss)
-    --    where
-    --        --FIXME REFAC pattern matching from the case into the function def
-    --        splitSplices x y = case (x, y) of 
-    --            (Splice _, _) -> False
-    --            (_, Splice _) -> False
-    --            _ -> True
-    --        createSpliceList xs = if isSplice xs
-    --            then (let [x] = xs in pushQuote x)
-    --            else QBranch (QLeaf nodeForm : map pushQuote xs)
-    --        isSplice xs = case xs of { [Splice _ _] -> True; _ -> False }
-    --pushQuote :: (UnQuasihexpr a) => p -> Quasihexpr p a -> Quasihexpr p a
-    --pushQuote p = impl . Quasiquote p
 
---FIXME I can generalize this to: class ?Homoiconic? f where {toAtom :: f a -> a; fromAtom :: a -> Maybe (f a)}
-{-| Implement this class to allow simplification of some hexprs generated by @unQuasiSpine@. See
-    'simplifyHexpr' for more details on exactly what transformations are performed.
+    The naive algorithm would usually produce hexprs that are more complex than is necessary.
+    This function factors quotation and quote manipulation to eliminate redundancy.
 
-    In order to simplify a hexpr, we require that any hexpr, no matter how complex, may be turned
-    into a single term of the type parameter, @a@. Further, 'toCode' and 'fromCode' are nearly
-    inverses of each other.
-
-    @
-    'fromCode' . 'toCode' === id
-    'toCode' ('fromCode' x) === id      whenever 'isCode' x
-    @
--}
-class (Eq a, UnQuasihexpr a) => SimplifyHexpr a where
-    {-| Whether an atom is a code atom. -}
-    isCode   :: a -> Bool
-    {-| Create a code atom from a 'Hexpr'. -}
-    toCode   :: Hexpr p a -> a
-    {-| Extract the 'Hexpr' from a code atom.
-
-        This method need only be total over the refinement type @{x :: a | 'isCode' x}@, not the
-        plain type @a@.
-    -}
-    fromCode :: p -> a -> Hexpr p a
-
-{-| The @unQuasihexpr@ algorithm usually produces hexprs that are more complex than is necessary.
-    This function factors @quoteForm@s, @nodeForm@s and @concatForm@s to eliminate redundancy.
-
-    Assuming that 'fromCode' does not fail in the transformations, the particular transforms made
+    Assuming that 'fromQuote' does not fail in the transformations, the particular transforms made
     are as follows. Appropriate recursive searches are made so that no opportunity to simplify is
     lost.
 
-    * @('quoteForm' s)@ ---> @'toCode' s@
+    * @('mkNode' c1 ... cn)@ ---> @('mkQuote' (s1 ... sn))@
+        where @si = 'fromQuote' ci@
 
-    * @('nodeForm' c1 ... cn)@ ---> @('quoteForm' (s1 ... sn))@
-        where @si = 'fromCode' ci@
-
-    * @('concatForm' c1 ... cn)@ ---> @('quoteForm' cs)@ 
-        where @cs = conjoins ('fromCode' \<$\> [c1, ..., cn])@
-        with @conjoins xs = head xs 'conjoinsl' tail xs@
+    * @('mkConcat' c1 ... cn)@ ---> @('mkQuote' cs)@ 
+        where @cs = conjoins ('fromQuote' \<$\> [c1, ..., cn])@
 
     TODO: The following are unimplemented, but shouldn't matter too much.
     However, ideally the set of Hexprs returned from this function should be
@@ -233,8 +136,36 @@ class (Eq a, UnQuasihexpr a) => SimplifyHexpr a where
     * Any immediate siblings of nodeForm-lead branches are pushed into the nodeForm just so long as
         the parent is not a concatForm-lead branch.
 -}
-simplifyHexpr :: SimplifyHexpr a => Hexpr p a -> Hexpr p a
-simplifyHexpr x = error "TODO"
+unQuasihexpr :: (UnQuasihexpr a) => Quasihexpr p a -> Hexpr p a
+unQuasihexpr = simplify . removeQuotation . go
+    where
+    go (QLeaf p x)                     = QLeaf p x
+    go (QBranch p xs)                  = QBranch p (go <$> xs)
+    go (Quote p x)                     = Quote p (go x)
+    go (Quasiquote q (QLeaf p x))      = Quote q (QLeaf p x)
+    go (Quasiquote q (QBranch p xs))   = unquasiquoteBranch q p xs
+    go (Quasiquote q (Quote p x))      = Quote q (Quote p (go x))
+    go (Quasiquote q (Quasiquote p x)) = pushQuote q . pushQuote p $ x
+    go (Quasiquote q (Unquote p x))    = go x
+    go (Quasiquote q (Splice p x))     = go x
+    go (Unquote p x)                   = error "malformed quasiquotation"
+    go (Splice p x)                    = error "malformed quasiquotation"
+    unquasiquoteBranch q p xs = case groupBy splitSplices xs of
+            -- if xss is a singleton, it contains no splices
+            [xs] -> mkNode p (pushQuote q <$> xs)
+            xss  -> mkConcat p (createSpliceList <$> xss)
+        where
+        splitSplices x y = case (x, y) of 
+            (Splice _ _, _) -> False
+            (_, Splice _ _) -> False
+            _ -> True
+        createSpliceList xs = case xs of
+            [Splice _ x] -> go x
+            _ -> mkList q (pushQuote q <$> xs)
+    pushQuote p = go . Quasiquote p
+    simplify = id --STUB
+--simplifyHexpr :: SimplifyHexpr a => Hexpr p a -> Hexpr p a
+--simplifyHexpr x = error "TODO"
     --case x of
     --    Leaf p x         -> Leaf p x
     --    Branch p (x:[])  -> simplifyHexpr x

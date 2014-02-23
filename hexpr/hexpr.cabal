@@ -53,9 +53,11 @@ library
   exposed-modules:  Data.Hierarchy,
                     Data.Sexpr,
                     Data.Hexpr,
+                    Language.Parse,
                     Language.Desugar,
                     Language.Distfix,
                     Control.Monad.Report,
+                    Control.Monad.Errors,
                     Control.Monad.Gensym,
                     Control.Monad.Environment,
                     Data.FiniteType
