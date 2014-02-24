@@ -175,7 +175,7 @@ data Distfix a = Distfix ([a] -> a) Shape [a]
     documentation might better present the reasoning involved.
 -}
 data Shape = Closed | HalfOpenRight | HalfOpenLeft | OpenRight | OpenLeft | OpenNon
-    deriving (Eq)
+    deriving (Eq, Show)
 
 {-| A list, in descending order of precedence (ascending of binding tightness) of groups of
     Distfixes.
@@ -432,3 +432,6 @@ instance Applicative (DistfixResult' e) where
 instance Monad (DistfixResult' e) where
     return = Result . Right
     (Result x) >>= k = Result (x >>= unResult . k)
+
+instance (Show a) => Show (Distfix a) where
+    show (Distfix _ shape x) = "Distfix " ++ show shape ++ " " ++ show x
