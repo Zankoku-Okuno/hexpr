@@ -37,7 +37,7 @@ import Control.Monad.Trans.Either hiding (hoistEither)
 
 
 {-| Shortcut for 'ErrorsT' over the 'Identity' monad. -}
-type Errors e a = ErrorsT e Identity a
+type Errors e = ErrorsT e Identity
 {-| Computations that can collect multiple errors. -}
 newtype ErrorsT e m a = ErrorsT { unErrors :: m (Maybe e -> (Maybe a, Maybe e)) }
 

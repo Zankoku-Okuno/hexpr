@@ -192,7 +192,7 @@ literalChar = (satisfy isNormalChar <?> "printing character") P.<|> (escape <?> 
         high =  (+ 0x100000) . stringToInteger 16 <$> (string "10" >> P.count 4 P.hexDigit)
 
 maybeLiteralChar :: (Monad m, P.Stream s m Char) => ParsecT s u m (Maybe Char)
-maybeLiteralChar = (const Nothing <$> (string "\&" P.<|> lineContinue)) P.<|> (Just <$> literalChar)
+maybeLiteralChar = (Just <$> literalChar) P.<|> (const Nothing <$> (string "\\&" P.<|> lineContinue)) 
     where
     lineContinue = between2 (char '\\') (P.many $ oneOf " \t\n\r") --FIXME more types of whitespace could be allowed
 
